@@ -1,3 +1,4 @@
+import re
 from pathlib import Path
 from unittest.mock import patch
 
@@ -8,6 +9,11 @@ from cctv.reconciler import CameraResult, CameraStatus
 from cctv.scanner import DiscoveredCamera
 
 runner = CliRunner()
+
+
+def _plain(text: str) -> str:
+    """Strip ANSI escape codes from text."""
+    return re.sub(r"\x1b\[[0-9;]*m", "", text)
 
 VALID_CONFIG = """\
 subnet: 192.168.1.0/24
@@ -36,14 +42,14 @@ def test_help_shows_commands() -> None:
 def test_list_help() -> None:
     result = runner.invoke(app, ["list", "--help"])
     assert result.exit_code == 0
-    assert "--subnet" in result.output
+    assert "--subnet" in _plain(result.output)
 
 
 def test_apply_help() -> None:
     result = runner.invoke(app, ["apply", "--help"])
     assert result.exit_code == 0
     assert "config" in result.output
-    assert "--subnet" in result.output
+    assert "--subnet" in _plain(result.output)
 
 
 # --- Validation integration tests (Story 1.3) ---

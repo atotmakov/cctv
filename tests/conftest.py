@@ -1,7 +1,3 @@
-import os
-
-os.environ.setdefault("NO_COLOR", "1")
-
 import pytest
 from requests.auth import HTTPDigestAuth
 
