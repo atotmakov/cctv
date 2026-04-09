@@ -7,7 +7,7 @@ from cctv.cli import app
 from cctv.reconciler import CameraResult, CameraStatus
 from cctv.scanner import DiscoveredCamera
 
-runner = CliRunner()
+runner = CliRunner(env={"NO_COLOR": "1"})
 
 VALID_CONFIG = """\
 subnet: 192.168.1.0/24
