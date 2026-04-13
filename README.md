@@ -5,7 +5,7 @@ Infrastructure-as-code for Axis IP camera fleets. Define desired camera state on
 ## Install
 
 ```bash
-pip install git+https://github.com/atotmakov/cctv.git
+pip install cctv-as-code
 ```
 
 For local development:
