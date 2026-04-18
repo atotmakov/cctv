@@ -9,13 +9,21 @@ dependencies = [
 ]
 
 [project.optional-dependencies]
-dev = ["pytest>=9.0"]
+dev = ["pytest>=9.0", "pytest-cov>=6.0"]
 
 [project.scripts]
 cctv = "cctv.cli:app"
 
 [tool.pytest.ini_options]
 testpaths = ["tests"]
+addopts = "--cov=cctv --cov-report=term-missing --cov-report=xml"
+
+[tool.coverage.run]
+source = ["src/cctv"]
+omit = ["tests/*"]
+
+[tool.coverage.report]
+show_missing = true
 
 [build-system]
 requires = ["setuptools>=68"]
