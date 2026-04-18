@@ -3,6 +3,7 @@ from __future__ import annotations
 import ipaddress
 from dataclasses import dataclass, field
 from pathlib import Path
+from typing import Optional
 
 import yaml
 
@@ -24,6 +25,7 @@ class CameraConfig:
     motion_sensitivity: int
     recording_retention_days: int = 33
     timeout: int = 5
+    timezone: Optional[str] = None   # POSIX timezone string, e.g. "CET-1CEST,M3.5.0,M10.5.0/3"
 
 
 def load_config(path: Path) -> CameraConfig:
@@ -86,4 +88,5 @@ def load_config(path: Path) -> CameraConfig:
         motion_sensitivity=int(motion["sensitivity"]),
         recording_retention_days=int(_rr) if (_rr := data.get("recording_retention_days")) is not None else 33,
         timeout=int(_raw) if (_raw := data.get("timeout")) is not None else 5,
+        timezone=data.get("timezone") or None,
     )

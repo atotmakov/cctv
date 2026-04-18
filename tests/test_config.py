@@ -166,6 +166,21 @@ def test_recording_retention_days_explicit(tmp_path: Path) -> None:
     assert cfg.recording_retention_days == 14
 
 
+def test_timezone_optional_defaults_to_none(tmp_path: Path) -> None:
+    config_file = tmp_path / "cameras.yaml"
+    config_file.write_text(VALID_YAML)
+    cfg = load_config(config_file)
+    assert cfg.timezone is None
+
+
+def test_timezone_loaded_when_present(tmp_path: Path) -> None:
+    yaml_content = VALID_YAML + "timezone: CET-1CEST,M3.5.0,M10.5.0/3\n"
+    config_file = tmp_path / "cameras.yaml"
+    config_file.write_text(yaml_content)
+    cfg = load_config(config_file)
+    assert cfg.timezone == "CET-1CEST,M3.5.0,M10.5.0/3"
+
+
 def test_timeout_null_value(tmp_path: Path) -> None:
     # 'timeout:' with no value → yaml.safe_load gives None → should default to 5
     yaml_content = VALID_YAML + "timeout:\n"

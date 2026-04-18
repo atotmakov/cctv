@@ -16,4 +16,6 @@ motion_detection:
 
 recording_retention_days: 33  # remove network share recordings older than this many days (default: 33)
 
+timezone: CET-1CEST,M3.5.0,M10.5.0/3  # POSIX timezone string — omit to leave camera timezone unchanged
+
 timeout: 5  # per-camera connection timeout in seconds (default: 5)

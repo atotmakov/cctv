@@ -32,6 +32,10 @@ _MOTION_SENSITIVITY = "root.Motion.M0.Sensitivity"  # VERIFIED on firmware 5.51.
 _STORAGE_GROUP = "root.Storage"                       # VERIFIED on firmware 5.51.7.4
 _STORAGE_RETENTION = "root.Storage.S1.CleanupMaxAge"  # days to retain recordings — VERIFIED
 
+# Time parameter names — VERIFIED on firmware 5.51.7.7 (2026-04-18)
+_TIME_GROUP = "root.Time"
+_TIME_TIMEZONE = "root.Time.POSIXTimeZone"   # POSIX timezone string
+
 # Hostname parameter names — VERIFIED on firmware 5.51.7.7 (2026-04-16)
 _NETWORK_VOLATILE_GROUP = "root.Network.VolatileHostName"          # DHCP-assigned hostname group
 _NETWORK_VOLATILE_HOSTNAME = "root.Network.VolatileHostName.HostName"  # hostname from DHCP server
@@ -126,6 +130,13 @@ def reconcile(
             config.timeout,
         )
         changed.append("retention")
+
+    # --- Time settings ---
+    if config.timezone:
+        time = vapix.get_params(camera.ip, _TIME_GROUP, auth, config.timeout)
+        if time.get(_TIME_TIMEZONE) != config.timezone:
+            vapix.set_params(camera.ip, {_TIME_TIMEZONE: config.timezone}, auth, config.timeout)
+            changed.append("timezone")
 
     # --- Hostname sync: copy DHCP-assigned hostname to static if available ---
     # root.Network.HostName is what the camera uses as the SMB subfolder name.

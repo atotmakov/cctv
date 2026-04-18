@@ -13,6 +13,7 @@ from cctv.reconciler import (
     _SMB_PASS,
     _MOTION_SENSITIVITY,
     _STORAGE_RETENTION,
+    _TIME_TIMEZONE,
     _NETWORK_HOSTNAME,
     _NETWORK_VOLATILE_HOSTNAME,
 )
@@ -475,6 +476,66 @@ def test_reconcile_retention_applied_label_in_output(
         result = reconcile(CAM, camera_config, mock_auth)
 
     assert result.settings_changed.count("retention") == 1
+
+
+# ---------------------------------------------------------------------------
+# Time settings (timezone + NTP)
+# ---------------------------------------------------------------------------
+
+
+def test_reconcile_timezone_set_when_differs(
+    camera_config, mock_auth, smb_params_response, motion_params_response,
+    storage_params_response, time_params_response, volatile_hostname_response,
+) -> None:
+    """Timezone in config differs from camera → SET called, 'timezone' in settings_changed."""
+    camera_config.timezone = "CET-1CEST,M3.5.0,M10.5.0/3"
+    # time_params_response has UTC0 — differs from config
+
+    with patch("cctv.reconciler.vapix.get_params") as mock_get, \
+         patch("cctv.reconciler.vapix.set_params") as mock_set:
+        mock_get.side_effect = [smb_params_response, motion_params_response, storage_params_response, time_params_response, volatile_hostname_response]
+        result = reconcile(CAM, camera_config, mock_auth)
+
+    assert "timezone" in result.settings_changed
+    assert result.status == CameraStatus.APPLIED
+    mock_set.assert_called_once_with(
+        CAM.ip,
+        {_TIME_TIMEZONE: "CET-1CEST,M3.5.0,M10.5.0/3"},
+        mock_auth,
+        camera_config.timeout,
+    )
+
+
+def test_reconcile_timezone_no_change_when_matches(
+    camera_config, mock_auth, smb_params_response, motion_params_response,
+    storage_params_response, time_params_response, volatile_hostname_response,
+) -> None:
+    """Timezone matches camera value → no SET, 'timezone' not in settings_changed."""
+    camera_config.timezone = "UTC0"
+    # time_params_response already has UTC0
+
+    with patch("cctv.reconciler.vapix.get_params") as mock_get, \
+         patch("cctv.reconciler.vapix.set_params") as mock_set:
+        mock_get.side_effect = [smb_params_response, motion_params_response, storage_params_response, time_params_response, volatile_hostname_response]
+        result = reconcile(CAM, camera_config, mock_auth)
+
+    assert "timezone" not in result.settings_changed
+    mock_set.assert_not_called()
+
+
+def test_reconcile_time_skipped_when_not_configured(
+    camera_config, mock_auth, smb_params_response, motion_params_response,
+    storage_params_response, volatile_hostname_response,
+) -> None:
+    """No timezone in config → root.Time group never read."""
+    # camera_config has no timezone by default
+    with patch("cctv.reconciler.vapix.get_params") as mock_get, \
+         patch("cctv.reconciler.vapix.set_params") as mock_set:
+        mock_get.side_effect = [smb_params_response, motion_params_response, storage_params_response, volatile_hostname_response]
+        result = reconcile(CAM, camera_config, mock_auth)
+
+    assert "timezone" not in result.settings_changed
+    assert mock_get.call_count == 4  # smb, motion, storage, volatile — no time call
 
 
 # ---------------------------------------------------------------------------
