@@ -16,7 +16,7 @@ cctv = "cctv.cli:app"
 
 [tool.pytest.ini_options]
 testpaths = ["tests"]
-addopts = "--cov=cctv --cov-report=term-missing --cov-report=xml"
+addopts = "--cov=cctv --cov-report=term-missing"
 
 [tool.coverage.run]
 source = ["src/cctv"]
