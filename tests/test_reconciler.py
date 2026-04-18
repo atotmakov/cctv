@@ -13,6 +13,8 @@ from cctv.reconciler import (
     _SMB_PASS,
     _MOTION_SENSITIVITY,
     _STORAGE_RETENTION,
+    _NETWORK_HOSTNAME,
+    _NETWORK_VOLATILE_HOSTNAME,
 )
 from cctv.scanner import DiscoveredCamera
 from cctv.vapix import VapixError
@@ -31,12 +33,13 @@ def default_soap_mocks(motion_action_config, motion_action_rule):
 
 
 def test_reconcile_all_match_returns_no_change(
-    camera_config, mock_auth, smb_params_response, motion_params_response, storage_params_response
+    camera_config, mock_auth, smb_params_response, motion_params_response,
+    storage_params_response, volatile_hostname_response,
 ) -> None:
     """All settings match → NO_CHANGE, no SET calls."""
     with patch("cctv.reconciler.vapix.get_params") as mock_get, \
          patch("cctv.reconciler.vapix.set_params") as mock_set:
-        mock_get.side_effect = [smb_params_response, motion_params_response, storage_params_response]
+        mock_get.side_effect = [smb_params_response, motion_params_response, storage_params_response, volatile_hostname_response]
         result = reconcile(CAM, camera_config, mock_auth)
 
     assert result.status == CameraStatus.NO_CHANGE
@@ -45,14 +48,15 @@ def test_reconcile_all_match_returns_no_change(
 
 
 def test_reconcile_smb_ip_mismatch_sets_only_smb_ip(
-    camera_config, mock_auth, smb_params_response, motion_params_response, storage_params_response
+    camera_config, mock_auth, smb_params_response, motion_params_response,
+    storage_params_response, volatile_hostname_response,
 ) -> None:
     """SMB host differs → smb_ip in settings_changed, set_params called once for smb_ip only."""
     smb_params_response = {**smb_params_response, _SMB_HOST: "10.0.0.99"}
 
     with patch("cctv.reconciler.vapix.get_params") as mock_get, \
          patch("cctv.reconciler.vapix.set_params") as mock_set:
-        mock_get.side_effect = [smb_params_response, motion_params_response, storage_params_response]
+        mock_get.side_effect = [smb_params_response, motion_params_response, storage_params_response, volatile_hostname_response]
         result = reconcile(CAM, camera_config, mock_auth)
 
     assert result.status == CameraStatus.APPLIED
@@ -60,6 +64,7 @@ def test_reconcile_smb_ip_mismatch_sets_only_smb_ip(
     assert "smb_creds" not in result.settings_changed
     assert "motion" not in result.settings_changed
     assert "retention" not in result.settings_changed
+    assert "hostname" not in result.settings_changed
     mock_set.assert_called_once_with(
         CAM.ip,
         {_SMB_HOST: camera_config.smb_ip},
@@ -69,14 +74,15 @@ def test_reconcile_smb_ip_mismatch_sets_only_smb_ip(
 
 
 def test_reconcile_motion_sensitivity_mismatch(
-    camera_config, mock_auth, smb_params_response, motion_params_response, storage_params_response
+    camera_config, mock_auth, smb_params_response, motion_params_response,
+    storage_params_response, volatile_hostname_response,
 ) -> None:
     """Motion sensitivity differs → motion in settings_changed, sensitivity SET only."""
     motion_params_response = {**motion_params_response, _MOTION_SENSITIVITY: "99"}
 
     with patch("cctv.reconciler.vapix.get_params") as mock_get, \
          patch("cctv.reconciler.vapix.set_params") as mock_set:
-        mock_get.side_effect = [smb_params_response, motion_params_response, storage_params_response]
+        mock_get.side_effect = [smb_params_response, motion_params_response, storage_params_response, volatile_hostname_response]
         result = reconcile(CAM, camera_config, mock_auth)
 
     assert result.status == CameraStatus.APPLIED
@@ -84,6 +90,7 @@ def test_reconcile_motion_sensitivity_mismatch(
     assert "smb_ip" not in result.settings_changed
     assert "smb_creds" not in result.settings_changed
     assert "retention" not in result.settings_changed
+    assert "hostname" not in result.settings_changed
     mock_set.assert_called_once_with(
         CAM.ip,
         {_MOTION_SENSITIVITY: "90"},
@@ -93,12 +100,13 @@ def test_reconcile_motion_sensitivity_mismatch(
 
 
 def test_reconcile_smb_ip_already_matches_no_set(
-    camera_config, mock_auth, smb_params_response, motion_params_response, storage_params_response
+    camera_config, mock_auth, smb_params_response, motion_params_response,
+    storage_params_response, volatile_hostname_response,
 ) -> None:
     """SMB IP matches config → smb_ip NOT in settings_changed, no smb_ip SET."""
     with patch("cctv.reconciler.vapix.get_params") as mock_get, \
          patch("cctv.reconciler.vapix.set_params") as mock_set:
-        mock_get.side_effect = [smb_params_response, motion_params_response, storage_params_response]
+        mock_get.side_effect = [smb_params_response, motion_params_response, storage_params_response, volatile_hostname_response]
         result = reconcile(CAM, camera_config, mock_auth)
 
     assert "smb_ip" not in result.settings_changed
@@ -116,12 +124,13 @@ def test_reconcile_vapix_error_propagates(
 
 
 def test_reconcile_returns_camera_result_with_ip_and_model(
-    camera_config, mock_auth, smb_params_response, motion_params_response, storage_params_response
+    camera_config, mock_auth, smb_params_response, motion_params_response,
+    storage_params_response, volatile_hostname_response,
 ) -> None:
     """Result carries ip and model from DiscoveredCamera."""
     with patch("cctv.reconciler.vapix.get_params") as mock_get, \
          patch("cctv.reconciler.vapix.set_params"):
-        mock_get.side_effect = [smb_params_response, motion_params_response, storage_params_response]
+        mock_get.side_effect = [smb_params_response, motion_params_response, storage_params_response, volatile_hostname_response]
         result = reconcile(CAM, camera_config, mock_auth)
 
     assert result.ip == "192.168.1.101"
@@ -130,14 +139,15 @@ def test_reconcile_returns_camera_result_with_ip_and_model(
 
 
 def test_reconcile_smb_share_mismatch_sets_smb_creds(
-    camera_config, mock_auth, smb_params_response, motion_params_response, storage_params_response
+    camera_config, mock_auth, smb_params_response, motion_params_response,
+    storage_params_response, volatile_hostname_response,
 ) -> None:
     """smb_share differs → smb_creds in settings_changed, set_params called with full creds group."""
     smb_params_response = {**smb_params_response, _SMB_SHARE: "/old/path"}
 
     with patch("cctv.reconciler.vapix.get_params") as mock_get, \
          patch("cctv.reconciler.vapix.set_params") as mock_set:
-        mock_get.side_effect = [smb_params_response, motion_params_response, storage_params_response]
+        mock_get.side_effect = [smb_params_response, motion_params_response, storage_params_response, volatile_hostname_response]
         result = reconcile(CAM, camera_config, mock_auth)
 
     assert result.status == CameraStatus.APPLIED
@@ -145,6 +155,7 @@ def test_reconcile_smb_share_mismatch_sets_smb_creds(
     assert "smb_ip" not in result.settings_changed
     assert "motion" not in result.settings_changed
     assert "retention" not in result.settings_changed
+    assert "hostname" not in result.settings_changed
     mock_set.assert_called_once_with(
         CAM.ip,
         {
@@ -158,14 +169,15 @@ def test_reconcile_smb_share_mismatch_sets_smb_creds(
 
 
 def test_reconcile_smb_username_mismatch_sets_smb_creds(
-    camera_config, mock_auth, smb_params_response, motion_params_response, storage_params_response
+    camera_config, mock_auth, smb_params_response, motion_params_response,
+    storage_params_response, volatile_hostname_response,
 ) -> None:
     """smb_username differs → smb_creds in settings_changed, no smb_ip SET."""
     smb_params_response = {**smb_params_response, _SMB_USER: "wronguser"}
 
     with patch("cctv.reconciler.vapix.get_params") as mock_get, \
          patch("cctv.reconciler.vapix.set_params") as mock_set:
-        mock_get.side_effect = [smb_params_response, motion_params_response, storage_params_response]
+        mock_get.side_effect = [smb_params_response, motion_params_response, storage_params_response, volatile_hostname_response]
         result = reconcile(CAM, camera_config, mock_auth)
 
     assert result.status == CameraStatus.APPLIED
@@ -177,7 +189,8 @@ def test_reconcile_smb_username_mismatch_sets_smb_creds(
 
 
 def test_reconcile_smb_both_ip_and_creds_change(
-    camera_config, mock_auth, smb_params_response, motion_params_response, storage_params_response
+    camera_config, mock_auth, smb_params_response, motion_params_response,
+    storage_params_response, volatile_hostname_response,
 ) -> None:
     """smb_ip AND smb_share both differ → both labels in settings_changed, set_params called twice."""
     smb_params_response = {
@@ -188,7 +201,7 @@ def test_reconcile_smb_both_ip_and_creds_change(
 
     with patch("cctv.reconciler.vapix.get_params") as mock_get, \
          patch("cctv.reconciler.vapix.set_params") as mock_set:
-        mock_get.side_effect = [smb_params_response, motion_params_response, storage_params_response]
+        mock_get.side_effect = [smb_params_response, motion_params_response, storage_params_response, volatile_hostname_response]
         result = reconcile(CAM, camera_config, mock_auth)
 
     assert result.status == CameraStatus.APPLIED
@@ -211,14 +224,15 @@ def test_reconcile_smb_both_ip_and_creds_change(
 
 
 def test_reconcile_smb_ip_matches_creds_differ(
-    camera_config, mock_auth, smb_params_response, motion_params_response, storage_params_response
+    camera_config, mock_auth, smb_params_response, motion_params_response,
+    storage_params_response, volatile_hostname_response,
 ) -> None:
     """smb_ip matches but smb_password differs → only smb_creds in settings_changed, no smb_ip SET."""
     smb_params_response = {**smb_params_response, _SMB_PASS: "wrongpass"}
 
     with patch("cctv.reconciler.vapix.get_params") as mock_get, \
          patch("cctv.reconciler.vapix.set_params") as mock_set:
-        mock_get.side_effect = [smb_params_response, motion_params_response, storage_params_response]
+        mock_get.side_effect = [smb_params_response, motion_params_response, storage_params_response, volatile_hostname_response]
         result = reconcile(CAM, camera_config, mock_auth)
 
     assert result.status == CameraStatus.APPLIED
@@ -244,14 +258,15 @@ def test_reconcile_smb_password_not_in_vapix_error(
 
 
 def test_reconcile_motion_sensitivity_differs_sets_only_sensitivity(
-    camera_config, mock_auth, smb_params_response, motion_params_response, storage_params_response
+    camera_config, mock_auth, smb_params_response, motion_params_response,
+    storage_params_response, volatile_hostname_response,
 ) -> None:
     """Sensitivity differs → SET with sensitivity only; enabled is not written (D3: ActionRules pending)."""
     motion_params_response = {**motion_params_response, _MOTION_SENSITIVITY: "99"}
 
     with patch("cctv.reconciler.vapix.get_params") as mock_get, \
          patch("cctv.reconciler.vapix.set_params") as mock_set:
-        mock_get.side_effect = [smb_params_response, motion_params_response, storage_params_response]
+        mock_get.side_effect = [smb_params_response, motion_params_response, storage_params_response, volatile_hostname_response]
         result = reconcile(CAM, camera_config, mock_auth)
 
     assert result.status == CameraStatus.APPLIED
@@ -266,13 +281,14 @@ def test_reconcile_motion_sensitivity_differs_sets_only_sensitivity(
 
 
 def test_reconcile_motion_enabled_config_not_written(
-    camera_config, mock_auth, smb_params_response, motion_params_response, storage_params_response
+    camera_config, mock_auth, smb_params_response, motion_params_response,
+    storage_params_response, volatile_hostname_response,
 ) -> None:
     """D3: config.motion_enabled is never written via param.cgi regardless of camera state."""
     camera_config.motion_enabled = False
     with patch("cctv.reconciler.vapix.get_params") as mock_get, \
          patch("cctv.reconciler.vapix.set_params") as mock_set:
-        mock_get.side_effect = [smb_params_response, motion_params_response, storage_params_response]
+        mock_get.side_effect = [smb_params_response, motion_params_response, storage_params_response, volatile_hostname_response]
         result = reconcile(CAM, camera_config, mock_auth)
 
     assert result.status == CameraStatus.NO_CHANGE
@@ -281,12 +297,13 @@ def test_reconcile_motion_enabled_config_not_written(
 
 
 def test_reconcile_motion_already_matches_no_motion_set(
-    camera_config, mock_auth, smb_params_response, motion_params_response, storage_params_response
+    camera_config, mock_auth, smb_params_response, motion_params_response,
+    storage_params_response, volatile_hostname_response,
 ) -> None:
     """motion group matches config → 'motion' not in settings_changed, no motion SET calls."""
     with patch("cctv.reconciler.vapix.get_params") as mock_get, \
          patch("cctv.reconciler.vapix.set_params") as mock_set:
-        mock_get.side_effect = [smb_params_response, motion_params_response, storage_params_response]
+        mock_get.side_effect = [smb_params_response, motion_params_response, storage_params_response, volatile_hostname_response]
         result = reconcile(CAM, camera_config, mock_auth)
 
     assert result.status == CameraStatus.NO_CHANGE
@@ -295,13 +312,14 @@ def test_reconcile_motion_already_matches_no_motion_set(
 
 
 def test_reconcile_motion_sensitivity_float_treated_as_int(
-    camera_config, mock_auth, smb_params_response, motion_params_response, storage_params_response
+    camera_config, mock_auth, smb_params_response, motion_params_response,
+    storage_params_response, volatile_hostname_response,
 ) -> None:
     """Float motion_sensitivity (e.g. 90.0) must compare as '90', not '90.0'."""
     camera_config.motion_sensitivity = 90.0
     with patch("cctv.reconciler.vapix.get_params") as mock_get, \
          patch("cctv.reconciler.vapix.set_params") as mock_set:
-        mock_get.side_effect = [smb_params_response, motion_params_response, storage_params_response]
+        mock_get.side_effect = [smb_params_response, motion_params_response, storage_params_response, volatile_hostname_response]
         result = reconcile(CAM, camera_config, mock_auth)
 
     assert result.status == CameraStatus.NO_CHANGE
@@ -310,12 +328,13 @@ def test_reconcile_motion_sensitivity_float_treated_as_int(
 
 
 def test_reconcile_motion_skipped_when_group_absent(
-    camera_config, mock_auth, smb_params_response, storage_params_response
+    camera_config, mock_auth, smb_params_response, storage_params_response,
+    volatile_hostname_response,
 ) -> None:
     """Models without root.Motion group (e.g. M3005) must not trigger a motion SET."""
     with patch("cctv.reconciler.vapix.get_params") as mock_get, \
          patch("cctv.reconciler.vapix.set_params") as mock_set:
-        mock_get.side_effect = [smb_params_response, {}, storage_params_response]
+        mock_get.side_effect = [smb_params_response, {}, storage_params_response, volatile_hostname_response]
         result = reconcile(CAM, camera_config, mock_auth)
 
     assert "motion" not in result.settings_changed
@@ -324,6 +343,7 @@ def test_reconcile_motion_skipped_when_group_absent(
 
 def test_reconcile_adds_full_frame_window_when_absent(
     camera_config, mock_auth, smb_params_response, storage_params_response,
+    volatile_hostname_response,
 ) -> None:
     """No full-frame window exists → add_motion_window called, 'motion_window' in settings_changed."""
     no_fullframe = {
@@ -346,8 +366,8 @@ def test_reconcile_adds_full_frame_window_when_absent(
     with patch("cctv.reconciler.vapix.get_params") as mock_get, \
          patch("cctv.reconciler.vapix.set_params"), \
          patch("cctv.reconciler.vapix.add_motion_window", return_value=1) as mock_add_win:
-        # SMB, first motion read (no full-frame), second motion read (after window added), storage
-        mock_get.side_effect = [smb_params_response, no_fullframe, full_frame_after, storage_params_response]
+        # SMB, first motion read (no full-frame), second motion read (after window added), storage, volatile
+        mock_get.side_effect = [smb_params_response, no_fullframe, full_frame_after, storage_params_response, volatile_hostname_response]
         result = reconcile(CAM, camera_config, mock_auth)
 
     assert "motion_window" in result.settings_changed
@@ -355,13 +375,14 @@ def test_reconcile_adds_full_frame_window_when_absent(
 
 
 def test_reconcile_no_window_added_when_fullframe_exists(
-    camera_config, mock_auth, smb_params_response, motion_params_response, storage_params_response,
+    camera_config, mock_auth, smb_params_response, motion_params_response,
+    storage_params_response, volatile_hostname_response,
 ) -> None:
     """Full-frame window already exists → add_motion_window NOT called."""
     with patch("cctv.reconciler.vapix.get_params") as mock_get, \
          patch("cctv.reconciler.vapix.set_params"), \
          patch("cctv.reconciler.vapix.add_motion_window") as mock_add_win:
-        mock_get.side_effect = [smb_params_response, motion_params_response, storage_params_response]
+        mock_get.side_effect = [smb_params_response, motion_params_response, storage_params_response, volatile_hostname_response]
         result = reconcile(CAM, camera_config, mock_auth)
 
     assert "motion_window" not in result.settings_changed
@@ -370,6 +391,7 @@ def test_reconcile_no_window_added_when_fullframe_exists(
 
 def test_reconcile_action_rule_uses_full_frame_window_id(
     camera_config, mock_auth, smb_params_response, storage_params_response,
+    volatile_hostname_response,
 ) -> None:
     """When full-frame window is M1 (window_id=1), action rule is created with window=1 filter."""
     m1_fullframe = {
@@ -388,7 +410,7 @@ def test_reconcile_action_rule_uses_full_frame_window_id(
          patch("cctv.reconciler.vapix.get_action_rules", return_value=[]), \
          patch("cctv.reconciler.vapix.add_action_configuration", return_value=7), \
          patch("cctv.reconciler.vapix.add_action_rule") as mock_add_rule:
-        mock_get.side_effect = [smb_params_response, m1_fullframe, storage_params_response]
+        mock_get.side_effect = [smb_params_response, m1_fullframe, storage_params_response, volatile_hostname_response]
         reconcile(CAM, camera_config, mock_auth)
 
     _, kwargs = mock_add_rule.call_args
@@ -402,20 +424,22 @@ def test_reconcile_action_rule_uses_full_frame_window_id(
 
 
 def test_reconcile_retention_mismatch_sets_retention(
-    camera_config, mock_auth, smb_params_response, motion_params_response, storage_params_response
+    camera_config, mock_auth, smb_params_response, motion_params_response,
+    storage_params_response, volatile_hostname_response,
 ) -> None:
     """retention_days differs → 'retention' in settings_changed, SET with new value."""
     storage_params_response = {**storage_params_response, _STORAGE_RETENTION: "7"}  # camera has 7, config=33
 
     with patch("cctv.reconciler.vapix.get_params") as mock_get, \
          patch("cctv.reconciler.vapix.set_params") as mock_set:
-        mock_get.side_effect = [smb_params_response, motion_params_response, storage_params_response]
+        mock_get.side_effect = [smb_params_response, motion_params_response, storage_params_response, volatile_hostname_response]
         result = reconcile(CAM, camera_config, mock_auth)
 
     assert result.status == CameraStatus.APPLIED
     assert "retention" in result.settings_changed
     assert "smb_ip" not in result.settings_changed
     assert "motion" not in result.settings_changed
+    assert "hostname" not in result.settings_changed
     mock_set.assert_called_once_with(
         CAM.ip,
         {_STORAGE_RETENTION: "33"},
@@ -425,12 +449,13 @@ def test_reconcile_retention_mismatch_sets_retention(
 
 
 def test_reconcile_retention_already_matches_no_set(
-    camera_config, mock_auth, smb_params_response, motion_params_response, storage_params_response
+    camera_config, mock_auth, smb_params_response, motion_params_response,
+    storage_params_response, volatile_hostname_response,
 ) -> None:
     """retention_days matches config → 'retention' NOT in settings_changed, no SET."""
     with patch("cctv.reconciler.vapix.get_params") as mock_get, \
          patch("cctv.reconciler.vapix.set_params") as mock_set:
-        mock_get.side_effect = [smb_params_response, motion_params_response, storage_params_response]
+        mock_get.side_effect = [smb_params_response, motion_params_response, storage_params_response, volatile_hostname_response]
         result = reconcile(CAM, camera_config, mock_auth)
 
     assert "retention" not in result.settings_changed
@@ -438,17 +463,84 @@ def test_reconcile_retention_already_matches_no_set(
 
 
 def test_reconcile_retention_applied_label_in_output(
-    camera_config, mock_auth, smb_params_response, motion_params_response, storage_params_response
+    camera_config, mock_auth, smb_params_response, motion_params_response,
+    storage_params_response, volatile_hostname_response,
 ) -> None:
     """When retention changes, settings_changed contains exactly 'retention' once."""
     storage_params_response = {**storage_params_response, _STORAGE_RETENTION: "90"}
 
     with patch("cctv.reconciler.vapix.get_params") as mock_get, \
          patch("cctv.reconciler.vapix.set_params"):
-        mock_get.side_effect = [smb_params_response, motion_params_response, storage_params_response]
+        mock_get.side_effect = [smb_params_response, motion_params_response, storage_params_response, volatile_hostname_response]
         result = reconcile(CAM, camera_config, mock_auth)
 
     assert result.settings_changed.count("retention") == 1
+
+
+# ---------------------------------------------------------------------------
+# Hostname sync
+# ---------------------------------------------------------------------------
+
+
+def test_reconcile_hostname_synced_when_volatile_differs(
+    camera_config, mock_auth, smb_params_response, motion_params_response,
+    storage_params_response,
+) -> None:
+    """Volatile hostname set and differs from static → static updated, 'hostname' in settings_changed."""
+    volatile = {
+        "root.Network.VolatileHostName.HostName": "axis-repo",
+        "root.Network.VolatileHostName.ObtainFromDHCP": "yes",
+    }
+    static = {_NETWORK_HOSTNAME: "axis-00408ce2767e"}
+
+    with patch("cctv.reconciler.vapix.get_params") as mock_get, \
+         patch("cctv.reconciler.vapix.set_params") as mock_set:
+        mock_get.side_effect = [smb_params_response, motion_params_response, storage_params_response, volatile, static]
+        result = reconcile(CAM, camera_config, mock_auth)
+
+    assert "hostname" in result.settings_changed
+    assert result.status == CameraStatus.APPLIED
+    mock_set.assert_called_once_with(
+        CAM.ip,
+        {_NETWORK_HOSTNAME: "axis-repo"},
+        mock_auth,
+        camera_config.timeout,
+    )
+
+
+def test_reconcile_hostname_not_synced_when_volatile_empty(
+    camera_config, mock_auth, smb_params_response, motion_params_response,
+    storage_params_response, volatile_hostname_response,
+) -> None:
+    """Volatile hostname empty (no DHCP name) → no hostname update, static get_params not called."""
+    with patch("cctv.reconciler.vapix.get_params") as mock_get, \
+         patch("cctv.reconciler.vapix.set_params") as mock_set:
+        mock_get.side_effect = [smb_params_response, motion_params_response, storage_params_response, volatile_hostname_response]
+        result = reconcile(CAM, camera_config, mock_auth)
+
+    assert "hostname" not in result.settings_changed
+    mock_set.assert_not_called()
+    assert mock_get.call_count == 4  # smb, motion, storage, volatile — no 5th call for static
+
+
+def test_reconcile_hostname_no_change_when_already_synced(
+    camera_config, mock_auth, smb_params_response, motion_params_response,
+    storage_params_response,
+) -> None:
+    """Volatile hostname matches static → no SET call, 'hostname' not in settings_changed."""
+    volatile = {
+        "root.Network.VolatileHostName.HostName": "axis-repo",
+        "root.Network.VolatileHostName.ObtainFromDHCP": "yes",
+    }
+    static = {_NETWORK_HOSTNAME: "axis-repo"}  # already synced
+
+    with patch("cctv.reconciler.vapix.get_params") as mock_get, \
+         patch("cctv.reconciler.vapix.set_params") as mock_set:
+        mock_get.side_effect = [smb_params_response, motion_params_response, storage_params_response, volatile, static]
+        result = reconcile(CAM, camera_config, mock_auth)
+
+    assert "hostname" not in result.settings_changed
+    mock_set.assert_not_called()
 
 
 # ---------------------------------------------------------------------------
@@ -458,7 +550,7 @@ def test_reconcile_retention_applied_label_in_output(
 
 def test_reconcile_creates_motion_rule_when_absent(
     camera_config, mock_auth, smb_params_response, motion_params_response,
-    storage_params_response, motion_action_config,
+    storage_params_response, volatile_hostname_response, motion_action_config,
 ) -> None:
     """No motion rule on camera → rule created, 'motion_rule' in settings_changed."""
     with patch("cctv.reconciler.vapix.get_params") as mock_get, \
@@ -467,7 +559,7 @@ def test_reconcile_creates_motion_rule_when_absent(
          patch("cctv.reconciler.vapix.get_action_rules", return_value=[]), \
          patch("cctv.reconciler.vapix.add_action_configuration", return_value=5) as mock_add_cfg, \
          patch("cctv.reconciler.vapix.add_action_rule") as mock_add_rule:
-        mock_get.side_effect = [smb_params_response, motion_params_response, storage_params_response]
+        mock_get.side_effect = [smb_params_response, motion_params_response, storage_params_response, volatile_hostname_response]
         result = reconcile(CAM, camera_config, mock_auth)
 
     assert "motion_rule" in result.settings_changed
@@ -482,7 +574,7 @@ def test_reconcile_creates_motion_rule_when_absent(
 
 def test_reconcile_no_change_when_motion_rule_exists(
     camera_config, mock_auth, smb_params_response, motion_params_response,
-    storage_params_response, motion_action_config, motion_action_rule,
+    storage_params_response, volatile_hostname_response, motion_action_config, motion_action_rule,
 ) -> None:
     """Motion recording rule already present → 'motion_rule' NOT in settings_changed."""
     with patch("cctv.reconciler.vapix.get_params") as mock_get, \
@@ -491,7 +583,7 @@ def test_reconcile_no_change_when_motion_rule_exists(
          patch("cctv.reconciler.vapix.get_action_rules", return_value=[motion_action_rule]), \
          patch("cctv.reconciler.vapix.add_action_configuration") as mock_add_cfg, \
          patch("cctv.reconciler.vapix.add_action_rule") as mock_add_rule:
-        mock_get.side_effect = [smb_params_response, motion_params_response, storage_params_response]
+        mock_get.side_effect = [smb_params_response, motion_params_response, storage_params_response, volatile_hostname_response]
         result = reconcile(CAM, camera_config, mock_auth)
 
     assert "motion_rule" not in result.settings_changed
@@ -500,7 +592,8 @@ def test_reconcile_no_change_when_motion_rule_exists(
 
 
 def test_reconcile_motion_rule_skipped_when_motion_disabled(
-    camera_config, mock_auth, smb_params_response, motion_params_response, storage_params_response,
+    camera_config, mock_auth, smb_params_response, motion_params_response,
+    storage_params_response, volatile_hostname_response,
 ) -> None:
     """motion_enabled=False → no SOAP calls at all for action rules."""
     camera_config.motion_enabled = False
@@ -508,7 +601,7 @@ def test_reconcile_motion_rule_skipped_when_motion_disabled(
          patch("cctv.reconciler.vapix.set_params"), \
          patch("cctv.reconciler.vapix.get_action_configurations") as mock_get_cfgs, \
          patch("cctv.reconciler.vapix.get_action_rules") as mock_get_rules:
-        mock_get.side_effect = [smb_params_response, motion_params_response, storage_params_response]
+        mock_get.side_effect = [smb_params_response, motion_params_response, storage_params_response, volatile_hostname_response]
         result = reconcile(CAM, camera_config, mock_auth)
 
     assert "motion_rule" not in result.settings_changed
@@ -518,7 +611,7 @@ def test_reconcile_motion_rule_skipped_when_motion_disabled(
 
 def test_reconcile_disabled_rule_not_counted_as_existing(
     camera_config, mock_auth, smb_params_response, motion_params_response,
-    storage_params_response, motion_action_config, motion_action_rule,
+    storage_params_response, volatile_hostname_response, motion_action_config, motion_action_rule,
 ) -> None:
     """A disabled motion rule must not satisfy the check — new rule should be created."""
     from cctv.vapix import ActionRule
@@ -535,7 +628,7 @@ def test_reconcile_disabled_rule_not_counted_as_existing(
          patch("cctv.reconciler.vapix.get_action_rules", return_value=[disabled_rule]), \
          patch("cctv.reconciler.vapix.add_action_configuration", return_value=9), \
          patch("cctv.reconciler.vapix.add_action_rule") as mock_add_rule:
-        mock_get.side_effect = [smb_params_response, motion_params_response, storage_params_response]
+        mock_get.side_effect = [smb_params_response, motion_params_response, storage_params_response, volatile_hostname_response]
         result = reconcile(CAM, camera_config, mock_auth)
 
     assert "motion_rule" in result.settings_changed
@@ -544,7 +637,7 @@ def test_reconcile_disabled_rule_not_counted_as_existing(
 
 def test_reconcile_non_networkshare_action_not_counted(
     camera_config, mock_auth, smb_params_response, motion_params_response,
-    storage_params_response, motion_action_rule,
+    storage_params_response, volatile_hostname_response, motion_action_rule,
 ) -> None:
     """Motion rule pointing to SD card (not NetworkShare) must still create a new NetworkShare rule."""
     from cctv.vapix import ActionConfiguration
@@ -560,7 +653,7 @@ def test_reconcile_non_networkshare_action_not_counted(
          patch("cctv.reconciler.vapix.get_action_rules", return_value=[motion_action_rule]), \
          patch("cctv.reconciler.vapix.add_action_configuration", return_value=10), \
          patch("cctv.reconciler.vapix.add_action_rule") as mock_add_rule:
-        mock_get.side_effect = [smb_params_response, motion_params_response, storage_params_response]
+        mock_get.side_effect = [smb_params_response, motion_params_response, storage_params_response, volatile_hostname_response]
         result = reconcile(CAM, camera_config, mock_auth)
 
     assert "motion_rule" in result.settings_changed

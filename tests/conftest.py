@@ -85,6 +85,15 @@ def motion_action_config():
 
 
 @pytest.fixture
+def volatile_hostname_response() -> dict[str, str]:
+    """Default: DHCP has not assigned a hostname — no hostname sync triggered."""
+    return {
+        "root.Network.VolatileHostName.HostName": "",
+        "root.Network.VolatileHostName.ObtainFromDHCP": "yes",
+    }
+
+
+@pytest.fixture
 def motion_action_rule(motion_action_config):
     """ActionRule pointing to the motion_action_config (fully configured)."""
     from cctv.vapix import ActionRule
