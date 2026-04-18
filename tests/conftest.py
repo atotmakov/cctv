@@ -85,6 +85,17 @@ def motion_action_config():
 
 
 @pytest.fixture
+def time_params_response() -> dict[str, str]:
+    """VAPIX time params: timezone UTC0, NTP server 192.168.1.100, static (no DHCP)."""
+    return {
+        "root.Time.POSIXTimeZone": "UTC0",
+        "root.Time.NTP.Server": "192.168.1.100",
+        "root.Time.ObtainFromDHCP": "no",
+        "root.Time.SyncSource": "NTP",
+    }
+
+
+@pytest.fixture
 def volatile_hostname_response() -> dict[str, str]:
     """Default: DHCP has not assigned a hostname — no hostname sync triggered."""
     return {
