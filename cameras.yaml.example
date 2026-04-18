@@ -13,6 +13,8 @@ smb:
 motion_detection:
   enabled: true
   sensitivity: 90
+  pre_trigger_time: 5   # seconds to record before motion event (default: 5)
+  post_trigger_time: 5  # seconds to record after motion event (default: 5)
 
 recording_retention_days: 33  # remove network share recordings older than this many days (default: 33)
 

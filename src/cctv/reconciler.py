@@ -153,7 +153,11 @@ def reconcile(
     if config.motion_enabled:
         # `motion` is already up-to-date (re-read above if a window was just added)
         window_id_for_rule = _find_full_frame_window_id(motion)
-        if _ensure_motion_action_rule(camera.ip, auth, config.timeout, window_id_for_rule):
+        if _ensure_motion_action_rule(
+            camera.ip, auth, config.timeout, window_id_for_rule,
+            config.motion_pre_trigger_time * 1000,
+            config.motion_post_trigger_time * 1000,
+        ):
             changed.append("motion_rule")
 
     status = CameraStatus.APPLIED if changed else CameraStatus.NO_CHANGE
@@ -229,11 +233,13 @@ def _ensure_motion_action_rule(
     auth: HTTPDigestAuth,
     timeout: int,
     window_id: Optional[int],
+    pre_duration_ms: int,
+    post_duration_ms: int,
 ) -> bool:
-    """Ensure a motion detection → record-to-NetworkShare action rule exists.
+    """Ensure a motion detection → record-to-NetworkShare action rule exists with the correct durations.
 
     If window_id is provided the rule condition filters on that specific window.
-    Returns True if a new rule was created, False if one already exists.
+    Returns True if a rule was created or updated, False if already correctly configured.
     """
     configs = vapix.get_action_configurations(ip, auth, timeout)
     rules = vapix.get_action_rules(ip, auth, timeout)
@@ -248,7 +254,13 @@ def _ensure_motion_action_rule(
         action_cfg = cfg_by_id.get(rule.primary_action)
         if action_cfg and "recording.storage" in action_cfg.template_token:
             if action_cfg.parameters.get("storage_id") == "NetworkShare":
-                return False  # Already correctly configured
+                if (action_cfg.parameters.get("pre_duration") == str(pre_duration_ms) and
+                        action_cfg.parameters.get("post_duration") == str(post_duration_ms)):
+                    return False  # Already correctly configured
+                # Durations differ — remove and recreate
+                vapix.remove_action_rule(ip, auth, timeout, rule.rule_id)
+                vapix.remove_action_configuration(ip, auth, timeout, action_cfg.config_id)
+                break
 
     # Build message filter
     motion_filter = 'boolean(//SimpleItem[@Name="motion" and @Value="1"])'
@@ -260,8 +272,8 @@ def _ensure_motion_action_rule(
         name="cctv_motion_record",
         template_token="com.axis.action.unlimited.recording.storage",
         parameters={
-            "post_duration": "5000",
-            "pre_duration": "5000",
+            "pre_duration": str(pre_duration_ms),
+            "post_duration": str(post_duration_ms),
             "storage_id": "NetworkShare",
             "stream_options": "",
         },

@@ -696,6 +696,69 @@ def test_reconcile_disabled_rule_not_counted_as_existing(
     mock_add_rule.assert_called_once()
 
 
+def test_reconcile_motion_timing_updated_when_differs(
+    camera_config, mock_auth, smb_params_response, motion_params_response,
+    storage_params_response, volatile_hostname_response,
+) -> None:
+    """Existing rule has wrong durations → old rule/config removed, new one created."""
+    from cctv.vapix import ActionConfiguration, ActionRule
+    old_cfg = ActionConfiguration(
+        config_id=3,
+        name="cctv_motion_record",
+        template_token="com.axis.action.unlimited.recording.storage",
+        parameters={"storage_id": "NetworkShare", "pre_duration": "2000", "post_duration": "2000", "stream_options": ""},
+    )
+    old_rule = ActionRule(rule_id=3, name="cctv_motion_record", enabled=True,
+                          topic="tns1:VideoAnalytics/tnsaxis:MotionDetection", primary_action=3)
+    camera_config.motion_pre_trigger_time = 10
+    camera_config.motion_post_trigger_time = 10
+
+    with patch("cctv.reconciler.vapix.get_params") as mock_get, \
+         patch("cctv.reconciler.vapix.set_params"), \
+         patch("cctv.reconciler.vapix.get_action_configurations", return_value=[old_cfg]), \
+         patch("cctv.reconciler.vapix.get_action_rules", return_value=[old_rule]), \
+         patch("cctv.reconciler.vapix.remove_action_rule") as mock_rm_rule, \
+         patch("cctv.reconciler.vapix.remove_action_configuration") as mock_rm_cfg, \
+         patch("cctv.reconciler.vapix.add_action_configuration", return_value=9) as mock_add_cfg, \
+         patch("cctv.reconciler.vapix.add_action_rule") as mock_add_rule:
+        mock_get.side_effect = [smb_params_response, motion_params_response, storage_params_response, volatile_hostname_response]
+        result = reconcile(CAM, camera_config, mock_auth)
+
+    assert "motion_rule" in result.settings_changed
+    mock_rm_rule.assert_called_once_with(CAM.ip, mock_auth, camera_config.timeout, 3)
+    mock_rm_cfg.assert_called_once_with(CAM.ip, mock_auth, camera_config.timeout, 3)
+    mock_add_cfg.assert_called_once()
+    _, kwargs = mock_add_cfg.call_args
+    assert kwargs["parameters"]["pre_duration"] == "10000"
+    assert kwargs["parameters"]["post_duration"] == "10000"
+    mock_add_rule.assert_called_once()
+
+
+def test_reconcile_motion_timing_no_change_when_matches(
+    camera_config, mock_auth, smb_params_response, motion_params_response,
+    storage_params_response, volatile_hostname_response, motion_action_config, motion_action_rule,
+) -> None:
+    """Existing rule has correct durations (5 s default) → no remove/recreate."""
+    # motion_action_config fixture has pre_duration=5000, post_duration=5000
+    # camera_config defaults to motion_pre_trigger_time=5, motion_post_trigger_time=5
+    with patch("cctv.reconciler.vapix.get_params") as mock_get, \
+         patch("cctv.reconciler.vapix.set_params"), \
+         patch("cctv.reconciler.vapix.get_action_configurations", return_value=[motion_action_config]), \
+         patch("cctv.reconciler.vapix.get_action_rules", return_value=[motion_action_rule]), \
+         patch("cctv.reconciler.vapix.remove_action_rule") as mock_rm_rule, \
+         patch("cctv.reconciler.vapix.remove_action_configuration") as mock_rm_cfg, \
+         patch("cctv.reconciler.vapix.add_action_configuration") as mock_add_cfg, \
+         patch("cctv.reconciler.vapix.add_action_rule") as mock_add_rule:
+        mock_get.side_effect = [smb_params_response, motion_params_response, storage_params_response, volatile_hostname_response]
+        result = reconcile(CAM, camera_config, mock_auth)
+
+    assert "motion_rule" not in result.settings_changed
+    mock_rm_rule.assert_not_called()
+    mock_rm_cfg.assert_not_called()
+    mock_add_cfg.assert_not_called()
+    mock_add_rule.assert_not_called()
+
+
 def test_reconcile_non_networkshare_action_not_counted(
     camera_config, mock_auth, smb_params_response, motion_params_response,
     storage_params_response, volatile_hostname_response, motion_action_rule,
