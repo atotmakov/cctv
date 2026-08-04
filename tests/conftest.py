@@ -105,6 +105,13 @@ def volatile_hostname_response() -> dict[str, str]:
 
 
 @pytest.fixture
+def vmd_app_running():
+    """InstalledApplication: vmd already installed and running (default/healthy state)."""
+    from cctv.vapix import InstalledApplication
+    return InstalledApplication(name="vmd", nice_name="AXIS Video Motion Detection", status="Running", version="4.3-1")
+
+
+@pytest.fixture
 def motion_action_rule(motion_action_config):
     """ActionRule pointing to the motion_action_config (fully configured)."""
     from cctv.vapix import ActionRule

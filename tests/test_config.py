@@ -186,6 +186,24 @@ def test_motion_trigger_times_loaded_when_present(tmp_path: Path) -> None:
     assert cfg.motion_post_trigger_time == 15
 
 
+def test_motion_app_package_path_defaults_to_none(tmp_path: Path) -> None:
+    config_file = tmp_path / "cameras.yaml"
+    config_file.write_text(VALID_YAML)
+    cfg = load_config(config_file)
+    assert cfg.motion_app_package_path is None
+
+
+def test_motion_app_package_path_loaded_when_present(tmp_path: Path) -> None:
+    yaml_content = VALID_YAML.replace(
+        "  sensitivity: 50",
+        "  sensitivity: 50\n  app_package_path: /opt/eap/vmd_4.3-1.eap",
+    )
+    config_file = tmp_path / "cameras.yaml"
+    config_file.write_text(yaml_content)
+    cfg = load_config(config_file)
+    assert cfg.motion_app_package_path == "/opt/eap/vmd_4.3-1.eap"
+
+
 def test_timezone_optional_defaults_to_none(tmp_path: Path) -> None:
     config_file = tmp_path / "cameras.yaml"
     config_file.write_text(VALID_YAML)

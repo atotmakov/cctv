@@ -7,6 +7,7 @@ from typer.testing import CliRunner
 from cctv.cli import app
 from cctv.reconciler import CameraResult, CameraStatus
 from cctv.scanner import DiscoveredCamera
+from cctv.status import CameraStatusResult
 
 runner = CliRunner()
 
@@ -37,6 +38,7 @@ def test_help_shows_commands() -> None:
     assert result.exit_code == 0
     assert "list" in result.output
     assert "apply" in result.output
+    assert "status" in result.output
 
 
 def test_list_help() -> None:
@@ -140,3 +142,87 @@ def test_list_cameras_subnet_override(tmp_path: Path) -> None:
     mock_scan.assert_called_once()
     assert mock_scan.call_args[0][0] == "10.0.0.0/24"
     assert result.exit_code == 2
+
+
+# --- status command tests (Story 4.1) ---
+
+
+def test_status_help() -> None:
+    result = runner.invoke(app, ["status", "--help"])
+    assert result.exit_code == 0
+    assert "config" in result.output
+    assert "--subnet" in _plain(result.output)
+
+
+def test_status_missing_config_file() -> None:
+    result = runner.invoke(app, ["status", "nonexistent_xyz_cctv.yaml"])
+    assert result.exit_code != 0
+
+
+def test_status_invalid_config(tmp_path: Path) -> None:
+    bad = tmp_path / "bad.yaml"
+    bad.write_text("subnet: 192.168.1.0/24\n")  # missing smb, credentials, motion_detection
+    result = runner.invoke(app, ["status", str(bad)])
+    assert result.exit_code == 2
+
+
+def test_status_runs_collector(tmp_path: Path) -> None:
+    cfg = tmp_path / "cameras.yaml"
+    cfg.write_text(VALID_CONFIG)
+    cameras = [DiscoveredCamera(ip="192.168.1.101", model="AXIS P3245-V")]
+    results = [CameraStatusResult(ip="192.168.1.101", model="AXIS P3245-V", smb_ip="1.2.3.4",
+                                   smb_share="/x", smb_username="u", timezone="UTC0", retention_days="33")]
+    with patch("cctv.cli.scanner.scan", return_value=cameras), \
+         patch("cctv.cli.status.collect_all", return_value=results) as mock_collect:
+        result = runner.invoke(app, ["status", str(cfg)])
+    assert result.exit_code == 0
+    mock_collect.assert_called_once()
+    call_cameras, call_cfg, call_auth = mock_collect.call_args[0]
+    assert call_cameras == cameras
+    assert call_cfg.subnet == "192.168.1.0/24"
+    assert "192.168.1.101" in result.output
+
+
+def test_status_exits_1_when_camera_fails(tmp_path: Path) -> None:
+    cfg = tmp_path / "cameras.yaml"
+    cfg.write_text(VALID_CONFIG)
+    cameras = [DiscoveredCamera(ip="192.168.1.101", model="AXIS P3245-V")]
+    results = [CameraStatusResult(ip="192.168.1.101", model="AXIS P3245-V", error="Connection timeout")]
+    with patch("cctv.cli.scanner.scan", return_value=cameras), \
+         patch("cctv.cli.status.collect_all", return_value=results):
+        result = runner.invoke(app, ["status", str(cfg)])
+    assert result.exit_code == 1
+    assert "STATUS UNAVAILABLE" in result.output
+
+
+def test_status_exits_2_when_no_cameras(tmp_path: Path) -> None:
+    cfg = tmp_path / "cameras.yaml"
+    cfg.write_text(VALID_CONFIG)
+    with patch("cctv.cli.scanner.scan", return_value=[]):
+        result = runner.invoke(app, ["status", str(cfg)])
+    assert result.exit_code == 2
+    assert "No Axis cameras found" in result.output
+
+
+def test_status_subnet_override(tmp_path: Path) -> None:
+    cfg = tmp_path / "cameras.yaml"
+    cfg.write_text(VALID_CONFIG)
+    with patch("cctv.cli.scanner.scan", return_value=[]) as mock_scan:
+        result = runner.invoke(app, ["status", str(cfg), "--subnet", "10.0.0.0/24"])
+    mock_scan.assert_called_once()
+    assert mock_scan.call_args[0][0] == "10.0.0.0/24"
+    assert result.exit_code == 2
+
+
+def test_status_never_calls_apply_executor(tmp_path: Path) -> None:
+    """Guardrail: the status command must never touch executor.apply_all (which writes)."""
+    cfg = tmp_path / "cameras.yaml"
+    cfg.write_text(VALID_CONFIG)
+    cameras = [DiscoveredCamera(ip="192.168.1.101", model="AXIS P3245-V")]
+    results = [CameraStatusResult(ip="192.168.1.101", model="AXIS P3245-V", smb_ip="1.2.3.4",
+                                   smb_share="/x", smb_username="u", timezone="UTC0", retention_days="33")]
+    with patch("cctv.cli.scanner.scan", return_value=cameras), \
+         patch("cctv.cli.status.collect_all", return_value=results), \
+         patch("cctv.cli.executor.apply_all") as mock_apply:
+        runner.invoke(app, ["status", str(cfg)])
+    mock_apply.assert_not_called()

@@ -217,11 +217,14 @@ Confident all four are up, Alex proceeds with `cctv apply`. No changes were made
 ```
 cctv list [--subnet <CIDR>]
 cctv apply <config.yaml> [--subnet <CIDR>]
+cctv status <config.yaml> [--subnet <CIDR>] [--json]
 ```
 
 - `list` — discovery only, read-only, no side effects
 - `apply` — convergence operation; reads config, discovers cameras, applies settings
+- `status` — read-only fleet status report; reads config, discovers cameras, reports each camera's live VAPIX state (motion detection, action rules, SMB share, time, retention) without applying any changes
 - `--subnet` — overrides the subnet defined in config file
+- `--json` (status only) — machine-readable JSON output instead of human-readable text
 
 ### Output Format
 
@@ -235,7 +238,19 @@ Per-camera lines with status (`applied`, `no change`, `FAILED`) and error detail
 Summary: 2 applied, 1 no change, 1 failed
 ```
 
-Machine-readable output (`--output json`) is a Phase 2 feature.
+Machine-readable output (`--output json`) for `apply`/`list` remains a Phase 2 feature. `cctv status --json` (Epic 4) is scoped narrower: JSON output for the read-only status report only.
+
+`cctv status` per-camera text block:
+
+```
+192.168.1.101  AXIS M3005 Network Camera
+  motion app:   VideoMotionDetection (AXIS Video Motion Detection) — Running
+  motion:       enabled, sensitivity 90, full-frame window
+  action rules: cctv_motion_record — motion → record to NetworkShare (pre 5s, post 2s)
+  smb share:    192.168.1.100:/cctv  (user: cctv)
+  time:         MSK-3
+  retention:    33 days
+```
 
 ### Exit Codes
 
@@ -310,6 +325,17 @@ motion_detection:
 - **FR25:** The system can exit with code `0` when all cameras succeed (applied or no-change), `1` when one or more cameras fail, and `2` on a fatal error.
 - **FR26:** The system can write all error and diagnostic output to stderr, keeping stdout clean for status output.
 - **FR27:** The operator can see the count of cameras found during a `cctv list` run along with their IPs and models.
+- **FR28:** The system can detect whether the AXIS Video Motion Detection app is installed and running on a camera, and — for legacy cameras where it doesn't ship pre-installed — install it from a local `.eap` package path specified in config before configuring motion detection.
+- **FR35:** The system can link the motion-detection action rule to the actual motion source in use on a camera — the installed AXIS Video Motion Detection app's own event topic on legacy cameras where that app had to be installed (FR28), rather than assuming the fixed built-in window-based motion topic applies to every camera.
+
+### Fleet Status Reporting
+
+- **FR29:** The operator can run `cctv status <config.yaml>` to see the current live VAPIX state of each discovered camera without applying any changes.
+- **FR30:** The system can report each camera's motion detection app installation/running status and its configured window(s)/sensitivity.
+- **FR31:** The system can report each camera's configured action rules (events) together with their linked action configuration (trigger condition, target action, pre/post duration).
+- **FR32:** The system can report each camera's configured SMB/network share settings (IP, share path, username) excluding passwords.
+- **FR33:** The system can report each camera's current timezone and recording retention (cleanup max age) setting.
+- **FR34:** The operator can request `cctv status` output as JSON via a `--json` flag for machine-readable consumption.
 
 ## Non-Functional Requirements
 

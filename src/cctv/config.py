@@ -25,6 +25,7 @@ class CameraConfig:
     motion_sensitivity: int
     motion_pre_trigger_time: int = 5   # seconds recorded before the motion event
     motion_post_trigger_time: int = 5  # seconds recorded after the motion event
+    motion_app_package_path: Optional[str] = None  # path to .eap installer for legacy cameras without VMD pre-installed
     recording_retention_days: int = 33
     timeout: int = 5
     timezone: Optional[str] = None   # POSIX timezone string, e.g. "CET-1CEST,M3.5.0,M10.5.0/3"
@@ -90,6 +91,7 @@ def load_config(path: Path) -> CameraConfig:
         motion_sensitivity=int(motion["sensitivity"]),
         motion_pre_trigger_time=int(motion.get("pre_trigger_time", 5)),
         motion_post_trigger_time=int(motion.get("post_trigger_time", 5)),
+        motion_app_package_path=motion.get("app_package_path") or None,
         recording_retention_days=int(_rr) if (_rr := data.get("recording_retention_days")) is not None else 33,
         timeout=int(_raw) if (_raw := data.get("timeout")) is not None else 5,
         timezone=data.get("timezone") or None,

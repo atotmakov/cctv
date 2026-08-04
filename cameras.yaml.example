@@ -15,6 +15,9 @@ motion_detection:
   sensitivity: 90
   pre_trigger_time: 5   # seconds to record before motion event (default: 5)
   post_trigger_time: 5  # seconds to record after motion event (default: 5)
+  # app_package_path: /path/to/vmd.eap  # required only for legacy cameras that don't
+  #   ship with the AXIS Video Motion Detection app pre-installed; the tool uploads
+  #   and installs it from this local file before configuring motion detection
 
 recording_retention_days: 33  # remove network share recordings older than this many days (default: 33)
 

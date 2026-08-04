@@ -33,11 +33,11 @@
 # - Stories can be worked in parallel if team capacity allows
 # - SM typically creates next story after previous one is 'done' to incorporate learnings
 # - Dev moves story to 'review', then runs code-review (fresh context, different LLM recommended)
-# - Recommended build order: 1.1 → 1.2 → 1.3 → 1.4 → 2.1 → 2.2 → 3.1 → 3.2 → 3.3 → 3.4 → 3.5
+# - Recommended build order: 1.1 → 1.2 → 1.3 → 1.4 → 2.1 → 2.2 → 3.1 → 3.2 → 3.3 → 3.4 → 3.5 → 3.6 → 4.1 → 4.2
 # - IMPORTANT: Verify VAPIX param names on real hardware before starting Story 1.4 (vapix.py)
 
 generated: 2026-04-01
-last_updated: 2026-04-05 # Epic 3 retrospective done
+last_updated: 2026-08-03 # Story 3.7 hardware-verified and done: legacy VMD app event-linked action rule (FR35)
 project: cctv
 project_key: NOKEY
 tracking_system: file-system
@@ -66,3 +66,19 @@ development_status:
   3-4-failure-isolated-apply-executor: done
   3-5-per-camera-output-summary-and-exit-codes: done
   epic-3-retrospective: done
+  # Added post-retrospective, 2026-07-24: legacy-camera VMD app auto-install, implemented
+  # and hardware-verified against real AXIS M3005 units on the operator's own subnet.
+  3-6-legacy-camera-vmd-app-detection-and-install: done
+  # Added post-retrospective, 2026-07-25: action rule on legacy-app-install path must
+  # target the installed app's own event topic, not the built-in window-based topic
+  # (FR35). Hardware-verified 2026-08-03 against real fleet (192.168.1.57/.60/.72/.79):
+  # topic/filter confirmed via camera UI + GetActionRules readback, plus a real
+  # migration bug found and fixed (stale built-in-topic rules weren't upgraded by a
+  # plain re-run). cctv status also now labels motion source (legacy app vs built-in).
+  3-7-legacy-vmd-app-event-linked-action-rule: done
+
+  # Epic 4: Camera Fleet Status Reporting (cctv status)
+  epic-4: in-progress
+  4-1-camera-status-collection-and-text-report: done
+  4-2-json-output-for-cctv-status: backlog
+  epic-4-retrospective: optional

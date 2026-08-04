@@ -16,6 +16,17 @@ from cctv.vapix import (
     add_action_rule,
     ActionConfiguration,
     ActionRule,
+    get_applications,
+    upload_application,
+    start_application,
+    InstalledApplication,
+    get_vmd4_profiles,
+    Vmd4Profile,
+    get_vmd4_configuration,
+    set_vmd4_configuration,
+    get_vmd_app_config,
+    set_vmd_app_config,
+    VmdAppArea,
 )
 
 AUTH = HTTPDigestAuth("root", "testpass")
@@ -365,3 +376,378 @@ def test_soap_connection_error_raises_vapix_error() -> None:
     with patch("cctv.vapix.requests.post", side_effect=req_lib.exceptions.ConnectionError("refused")):
         with pytest.raises(VapixError, match="Connection error"):
             get_action_configurations(IP, AUTH, timeout=5)
+
+
+# ---------------------------------------------------------------------------
+# Application (ACAP) install helpers
+# ---------------------------------------------------------------------------
+
+APPLICATIONS_LIST_RESPONSE = """<reply result="ok">
+ <application Name="vmd" NiceName="AXIS Video Motion Detection" Vendor="Axis Communications" Version="4.3-1" ApplicationID="12345" License="None" Status="Running" ConfigurationPage="local/vmd/config.html" VendorHomePage="http://www.axis.com"/>
+ <application Name="objectanalytics" NiceName="AXIS Object Analytics" Vendor="Axis Communications" Version="1.2-3" ApplicationID="54321" License="None" Status="Stopped" ConfigurationPage="local/objectanalytics/config.html" VendorHomePage="http://www.axis.com"/>
+</reply>"""
+
+
+def test_get_applications_parses_response() -> None:
+    mock_resp = MagicMock(status_code=200, text=APPLICATIONS_LIST_RESPONSE)
+    with patch("cctv.vapix.requests.get", return_value=mock_resp) as mock_get:
+        apps = get_applications(IP, AUTH, timeout=5)
+    assert len(apps) == 2
+    assert apps[0] == InstalledApplication(name="vmd", nice_name="AXIS Video Motion Detection", status="Running", version="4.3-1")
+    assert apps[1] == InstalledApplication(name="objectanalytics", nice_name="AXIS Object Analytics", status="Stopped", version="1.2-3")
+    mock_get.assert_called_once_with(
+        f"http://{IP}/axis-cgi/applications/list.cgi",
+        auth=AUTH,
+        timeout=5,
+    )
+
+
+def test_get_applications_missing_version_defaults_empty() -> None:
+    resp = '<reply result="ok"><application Name="vmd" NiceName="AXIS Video Motion Detection" Status="Running"/></reply>'
+    mock_resp = MagicMock(status_code=200, text=resp)
+    with patch("cctv.vapix.requests.get", return_value=mock_resp):
+        apps = get_applications(IP, AUTH, timeout=5)
+    assert apps[0].version == ""
+
+
+def test_get_applications_empty() -> None:
+    mock_resp = MagicMock(status_code=200, text='<reply result="ok"></reply>')
+    with patch("cctv.vapix.requests.get", return_value=mock_resp):
+        assert get_applications(IP, AUTH, timeout=5) == []
+
+
+def test_get_applications_non_2xx() -> None:
+    mock_resp = MagicMock(status_code=401, reason="Unauthorized")
+    with patch("cctv.vapix.requests.get", return_value=mock_resp):
+        with pytest.raises(VapixError, match="401"):
+            get_applications(IP, AUTH, timeout=5)
+
+
+def test_get_applications_timeout() -> None:
+    with patch("cctv.vapix.requests.get", side_effect=req_lib.exceptions.Timeout):
+        with pytest.raises(VapixError, match="timeout"):
+            get_applications(IP, AUTH, timeout=5)
+
+
+def test_upload_application_success(tmp_path) -> None:
+    eap_file = tmp_path / "vmd_4.3-1.eap"
+    eap_file.write_bytes(b"fake-eap-bytes")
+    mock_resp = MagicMock(status_code=200, text="OK")
+    with patch("cctv.vapix.requests.post", return_value=mock_resp) as mock_post:
+        upload_application(IP, AUTH, timeout=5, eap_path=str(eap_file))
+    mock_post.assert_called_once()
+    call_kwargs = mock_post.call_args[1]
+    assert call_kwargs["auth"] == AUTH
+    assert call_kwargs["timeout"] == 5
+    assert "packfil" in call_kwargs["files"]
+    assert call_kwargs["files"]["packfil"][0] == "vmd_4.3-1.eap"
+
+
+def test_upload_application_missing_file_raises() -> None:
+    with pytest.raises(VapixError, match="not found"):
+        upload_application(IP, AUTH, timeout=5, eap_path="/nonexistent/vmd.eap")
+
+
+def test_upload_application_non_2xx_raises(tmp_path) -> None:
+    eap_file = tmp_path / "vmd.eap"
+    eap_file.write_bytes(b"fake-eap-bytes")
+    mock_resp = MagicMock(status_code=400, reason="Bad Request")
+    with patch("cctv.vapix.requests.post", return_value=mock_resp):
+        with pytest.raises(VapixError, match="400"):
+            upload_application(IP, AUTH, timeout=5, eap_path=str(eap_file))
+
+
+def test_upload_application_error_body_raises(tmp_path) -> None:
+    eap_file = tmp_path / "vmd.eap"
+    eap_file.write_bytes(b"fake-eap-bytes")
+    mock_resp = MagicMock(status_code=200, text="Error: incompatible architecture")
+    with patch("cctv.vapix.requests.post", return_value=mock_resp):
+        with pytest.raises(VapixError, match="rejected"):
+            upload_application(IP, AUTH, timeout=5, eap_path=str(eap_file))
+
+
+def test_start_application_success() -> None:
+    mock_resp = MagicMock(status_code=200, text="OK")
+    with patch("cctv.vapix.requests.get", return_value=mock_resp) as mock_get:
+        start_application(IP, AUTH, timeout=5, package="vmd")
+    mock_get.assert_called_once_with(
+        f"http://{IP}/axis-cgi/applications/control.cgi",
+        params={"action": "start", "package": "vmd"},
+        auth=AUTH,
+        timeout=5,
+    )
+
+
+def test_start_application_non_2xx_raises() -> None:
+    mock_resp = MagicMock(status_code=400, reason="Bad Request")
+    with patch("cctv.vapix.requests.get", return_value=mock_resp):
+        with pytest.raises(VapixError, match="400"):
+            start_application(IP, AUTH, timeout=5, package="vmd")
+
+
+def test_start_application_error_body_raises() -> None:
+    mock_resp = MagicMock(status_code=200, text="Error: no such package")
+    with patch("cctv.vapix.requests.get", return_value=mock_resp):
+        with pytest.raises(VapixError, match="rejected"):
+            start_application(IP, AUTH, timeout=5, package="vmd")
+
+
+# ---------------------------------------------------------------------------
+# get_vmd4_profiles — built-in VMD3/VMD4 app's own JSON profile config
+# ---------------------------------------------------------------------------
+
+VMD4_CONFIG_RESPONSE = {
+    "apiVersion": "1.4", "method": "getConfiguration", "context": "",
+    "data": {
+        "configurationStatus": 0,
+        "profiles": [
+            {"camera": 1, "filters": [], "triggers": [], "uid": 1, "name": "Profile 1"},
+        ],
+        "cameras": [{"id": 1, "rotation": 0, "active": True}],
+    },
+}
+
+
+def test_get_vmd4_profiles_parses_response() -> None:
+    mock_resp = MagicMock(status_code=200)
+    mock_resp.json.return_value = VMD4_CONFIG_RESPONSE
+    with patch("cctv.vapix.requests.post", return_value=mock_resp) as mock_post:
+        profiles = get_vmd4_profiles(IP, AUTH, timeout=5)
+    assert profiles == [Vmd4Profile(uid=1, name="Profile 1", camera=1)]
+    mock_post.assert_called_once_with(
+        f"http://{IP}/local/vmd/control.cgi",
+        json={"apiVersion": "1.4", "method": "getConfiguration"},
+        auth=AUTH,
+        timeout=5,
+    )
+
+
+def test_get_vmd4_profiles_empty() -> None:
+    mock_resp = MagicMock(status_code=200)
+    mock_resp.json.return_value = {"data": {"profiles": []}}
+    with patch("cctv.vapix.requests.post", return_value=mock_resp):
+        assert get_vmd4_profiles(IP, AUTH, timeout=5) == []
+
+
+def test_get_vmd4_profiles_non_2xx_raises() -> None:
+    mock_resp = MagicMock(status_code=404, reason="Not Found")
+    with patch("cctv.vapix.requests.post", return_value=mock_resp):
+        with pytest.raises(VapixError, match="404"):
+            get_vmd4_profiles(IP, AUTH, timeout=5)
+
+
+def test_get_vmd4_profiles_invalid_json_raises() -> None:
+    mock_resp = MagicMock(status_code=200)
+    mock_resp.json.side_effect = ValueError("not json")
+    with patch("cctv.vapix.requests.post", return_value=mock_resp):
+        with pytest.raises(VapixError, match="not valid JSON"):
+            get_vmd4_profiles(IP, AUTH, timeout=5)
+
+
+def test_get_vmd4_profiles_timeout() -> None:
+    with patch("cctv.vapix.requests.post", side_effect=req_lib.exceptions.Timeout):
+        with pytest.raises(VapixError, match="timeout"):
+            get_vmd4_profiles(IP, AUTH, timeout=5)
+
+
+# ---------------------------------------------------------------------------
+# get_vmd4_configuration / set_vmd4_configuration — official VMD4 JSON API
+# ---------------------------------------------------------------------------
+
+
+def test_get_vmd4_configuration_returns_raw_data() -> None:
+    mock_resp = MagicMock(status_code=200)
+    mock_resp.json.return_value = VMD4_CONFIG_RESPONSE
+    with patch("cctv.vapix.requests.post", return_value=mock_resp):
+        data = get_vmd4_configuration(IP, AUTH, timeout=5)
+    assert data == VMD4_CONFIG_RESPONSE["data"]
+
+
+def test_get_vmd4_configuration_non_2xx_raises() -> None:
+    mock_resp = MagicMock(status_code=401, reason="Unauthorized")
+    with patch("cctv.vapix.requests.post", return_value=mock_resp):
+        with pytest.raises(VapixError, match="401"):
+            get_vmd4_configuration(IP, AUTH, timeout=5)
+
+
+def test_set_vmd4_configuration_uses_params_key_not_data() -> None:
+    """VERIFIED empirically against a real AXIS M3085-V (192.168.1.72, 2026-08-04):
+    sending the payload under 'data' silently no-ops (200, no error, nothing
+    persists) — only 'params' actually applies the change."""
+    mock_resp = MagicMock(status_code=200)
+    mock_resp.json.return_value = {"apiVersion": "1.4", "method": "setConfiguration", "context": "", "data": {}}
+    payload = {"profiles": []}
+    with patch("cctv.vapix.requests.post", return_value=mock_resp) as mock_post:
+        set_vmd4_configuration(IP, AUTH, timeout=5, data=payload)
+    mock_post.assert_called_once_with(
+        f"http://{IP}/local/vmd/control.cgi",
+        json={"apiVersion": "1.4", "context": "", "method": "setConfiguration", "params": payload},
+        auth=AUTH,
+        timeout=5,
+    )
+
+
+def test_set_vmd4_configuration_error_response_raises() -> None:
+    mock_resp = MagicMock(status_code=200)
+    mock_resp.json.return_value = {"apiVersion": "1.4", "method": "setConfiguration", "context": "",
+                                    "error": {"code": "2003", "message": "A mandatory parameter is missing"}}
+    with patch("cctv.vapix.requests.post", return_value=mock_resp):
+        with pytest.raises(VapixError, match="rejected"):
+            set_vmd4_configuration(IP, AUTH, timeout=5, data={})
+
+
+def test_set_vmd4_configuration_non_2xx_raises() -> None:
+    mock_resp = MagicMock(status_code=500, reason="Internal Server Error")
+    with patch("cctv.vapix.requests.post", return_value=mock_resp):
+        with pytest.raises(VapixError, match="500"):
+            set_vmd4_configuration(IP, AUTH, timeout=5, data={})
+
+
+def test_set_vmd4_configuration_timeout() -> None:
+    with patch("cctv.vapix.requests.post", side_effect=req_lib.exceptions.Timeout):
+        with pytest.raises(VapixError, match="timeout"):
+            set_vmd4_configuration(IP, AUTH, timeout=5, data={})
+
+
+# ---------------------------------------------------------------------------
+# get_vmd_app_config — legacy .eap app's own polygon area config
+# ---------------------------------------------------------------------------
+
+VMD_APP_CONFIG_RESPONSE = """<reply result="ok">
+<config version="1.0">
+<application name="VideoMotionDetection">
+  <ruleEngine>
+    <namedObjects>
+      <namedObject name="Detection Area">
+        <data knownTypeName="geometry.polygon">
+          <polygon>
+            <point x="0.60" y="0.60"/>
+            <point x="0.60" y="-0.60"/>
+            <point x="-0.60" y="-0.60"/>
+            <point x="-0.60" y="0.60"/>
+          </polygon>
+        </data>
+      </namedObject>
+    </namedObjects>
+    <rules>
+      <rule name="detection_0" function="monitor_area">
+        <parameter name="Include" value="Detection Area" />
+      </rule>
+    </rules>
+    <events>
+      <event name="motion">
+        <attr key="areaid" nicename="Area ID" tag="source" value="0"/>
+      </event>
+    </events>
+  </ruleEngine>
+</application>
+</config>
+</reply>"""
+
+
+def test_get_vmd_app_config_parses_response() -> None:
+    mock_resp = MagicMock(status_code=200, text=VMD_APP_CONFIG_RESPONSE)
+    with patch("cctv.vapix.requests.get", return_value=mock_resp) as mock_get:
+        areas = get_vmd_app_config(IP, AUTH, timeout=5, app_name="VideoMotionDetection")
+    assert areas == [VmdAppArea(name="Detection Area", points=[(0.6, 0.6), (0.6, -0.6), (-0.6, -0.6), (-0.6, 0.6)])]
+    mock_get.assert_called_once_with(
+        f"http://{IP}/axis-cgi/vaconfig.cgi",
+        params={"action": "get", "name": "VideoMotionDetection"},
+        auth=AUTH,
+        timeout=5,
+    )
+
+
+def test_get_vmd_app_config_no_named_objects() -> None:
+    mock_resp = MagicMock(status_code=200, text='<reply result="ok"><config version="1.0"/></reply>')
+    with patch("cctv.vapix.requests.get", return_value=mock_resp):
+        assert get_vmd_app_config(IP, AUTH, timeout=5, app_name="VideoMotionDetection") == []
+
+
+def test_get_vmd_app_config_non_2xx_raises() -> None:
+    mock_resp = MagicMock(status_code=401, reason="Unauthorized")
+    with patch("cctv.vapix.requests.get", return_value=mock_resp):
+        with pytest.raises(VapixError, match="401"):
+            get_vmd_app_config(IP, AUTH, timeout=5, app_name="VideoMotionDetection")
+
+
+def test_get_vmd_app_config_timeout() -> None:
+    with patch("cctv.vapix.requests.get", side_effect=req_lib.exceptions.Timeout):
+        with pytest.raises(VapixError, match="timeout"):
+            get_vmd_app_config(IP, AUTH, timeout=5, app_name="VideoMotionDetection")
+
+
+# ---------------------------------------------------------------------------
+# set_vmd_app_config — legacy .eap app's own polygon area config (write)
+# ---------------------------------------------------------------------------
+
+
+def test_set_vmd_app_config_full_flow() -> None:
+    """GET current config, surgically replace namedObjects + rule params, POST it
+    back with the raw (non-form-encoded) action=modify body — VERIFIED against a
+    real AXIS M3005 (192.168.1.60, 2026-08-04): this exact flow persisted."""
+    get_resp = MagicMock(status_code=200, text=VMD_APP_CONFIG_RESPONSE)
+    post_resp = MagicMock(status_code=200, text='<reply result="ok" />')
+    new_area = [VmdAppArea(name="Detection Area", points=[(1.0, 1.0), (1.0, -1.0), (-1.0, -1.0), (-1.0, 1.0)])]
+
+    with patch("cctv.vapix.requests.get", return_value=get_resp) as mock_get, \
+         patch("cctv.vapix.requests.post", return_value=post_resp) as mock_post:
+        set_vmd_app_config(IP, AUTH, timeout=5, app_name="VideoMotionDetection", areas=new_area)
+
+    mock_get.assert_called_once_with(
+        f"http://{IP}/axis-cgi/vaconfig.cgi",
+        params={"action": "get", "name": "VideoMotionDetection"},
+        auth=AUTH,
+        timeout=5,
+    )
+    mock_post.assert_called_once()
+    args, kwargs = mock_post.call_args
+    assert args[0] == f"http://{IP}/axis-cgi/vaconfig.cgi"
+    body = kwargs["data"]
+    assert body.startswith("action=modify&name=VideoMotionDetection\n")
+    assert '<point x="1.00" y="1.00"/>' in body
+    assert '<point x="-1.00" y="-1.00"/>' in body
+    assert 'name="Detection Area"' in body
+    assert '<parameter name="Include" value="Detection Area"' in body
+    # untouched sections must survive the surgical replacement
+    assert 'key="areaid"' in body
+
+
+def test_set_vmd_app_config_get_non_2xx_raises() -> None:
+    mock_resp = MagicMock(status_code=401, reason="Unauthorized")
+    with patch("cctv.vapix.requests.get", return_value=mock_resp):
+        with pytest.raises(VapixError, match="401"):
+            set_vmd_app_config(IP, AUTH, timeout=5, app_name="VideoMotionDetection", areas=[])
+
+
+def test_set_vmd_app_config_get_missing_config_element_raises() -> None:
+    mock_resp = MagicMock(status_code=200, text='<reply result="ok"></reply>')
+    with patch("cctv.vapix.requests.get", return_value=mock_resp):
+        with pytest.raises(VapixError, match="did not contain a <config>"):
+            set_vmd_app_config(IP, AUTH, timeout=5, app_name="VideoMotionDetection", areas=[])
+
+
+def test_set_vmd_app_config_post_non_2xx_raises() -> None:
+    get_resp = MagicMock(status_code=200, text=VMD_APP_CONFIG_RESPONSE)
+    post_resp = MagicMock(status_code=500, reason="Internal Server Error")
+    with patch("cctv.vapix.requests.get", return_value=get_resp), \
+         patch("cctv.vapix.requests.post", return_value=post_resp):
+        with pytest.raises(VapixError, match="500"):
+            set_vmd_app_config(IP, AUTH, timeout=5, app_name="VideoMotionDetection", areas=[])
+
+
+def test_set_vmd_app_config_post_error_result_raises() -> None:
+    get_resp = MagicMock(status_code=200, text=VMD_APP_CONFIG_RESPONSE)
+    post_resp = MagicMock(status_code=200, text='<reply result="error">bad config</reply>')
+    with patch("cctv.vapix.requests.get", return_value=get_resp), \
+         patch("cctv.vapix.requests.post", return_value=post_resp):
+        with pytest.raises(VapixError, match="rejected"):
+            set_vmd_app_config(IP, AUTH, timeout=5, app_name="VideoMotionDetection", areas=[])
+
+
+def test_set_vmd_app_config_timeout_on_post() -> None:
+    get_resp = MagicMock(status_code=200, text=VMD_APP_CONFIG_RESPONSE)
+    with patch("cctv.vapix.requests.get", return_value=get_resp), \
+         patch("cctv.vapix.requests.post", side_effect=req_lib.exceptions.Timeout):
+        with pytest.raises(VapixError, match="timeout"):
+            set_vmd_app_config(IP, AUTH, timeout=5, app_name="VideoMotionDetection", areas=[])

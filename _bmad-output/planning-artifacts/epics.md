@@ -40,6 +40,14 @@ FR24: The operator can see an actionable error message when a camera fails, incl
 FR25: The system can exit with code `0` when all cameras succeed (applied or no-change), `1` when one or more cameras fail, and `2` on a fatal error.
 FR26: The system can write all error and diagnostic output to stderr, keeping stdout clean for status output.
 FR27: The operator can see the count of cameras found during a `cctv list` run along with their IPs and models.
+FR28: The system can detect whether the AXIS Video Motion Detection app is installed and running on a camera, and — for legacy cameras where it doesn't ship pre-installed — install it from a local `.eap` package path specified in config before configuring motion detection.
+FR29: The operator can run `cctv status <config.yaml>` to see the current live VAPIX state of each discovered camera without applying any changes.
+FR30: The system can report each camera's motion detection app installation/running status and its configured window(s)/sensitivity.
+FR31: The system can report each camera's configured action rules (events) together with their linked action configuration (trigger condition, target action, pre/post duration).
+FR32: The system can report each camera's configured SMB/network share settings (IP, share path, username) excluding passwords.
+FR33: The system can report each camera's current timezone and recording retention (cleanup max age) setting.
+FR34: The operator can request `cctv status` output as JSON via a `--json` flag for machine-readable consumption.
+FR35: The system can link the motion-detection action rule to the actual motion source in use on a camera — the installed AXIS Video Motion Detection app's own event topic on legacy cameras where that app had to be installed, rather than assuming the fixed built-in window-based motion topic applies to every camera.
 
 ### NonFunctional Requirements
 
@@ -104,6 +112,14 @@ FR24: Epic 3 — actionable error message with camera IP and failure reason
 FR25: Epic 3 — exit code 0 (all ok), 1 (partial failure), 2 (fatal error)
 FR26: Epic 3 — errors and diagnostics to stderr; stdout clean for status output
 FR27: Epic 2 — count of cameras found during list run, with IPs and models
+FR28: Epic 3 — detect/install AXIS Video Motion Detection app on legacy cameras before configuring motion detection (Story 3.6)
+FR29: Epic 4 — `cctv status` read-only fleet status report (Story 4.1)
+FR30: Epic 4 — report motion detection app status + window/sensitivity (Story 4.1)
+FR31: Epic 4 — report action rules (events) + linked action configuration (Story 4.1)
+FR32: Epic 4 — report SMB/network share settings, excluding passwords (Story 4.1)
+FR33: Epic 4 — report timezone + recording retention (Story 4.1)
+FR34: Epic 4 — `--json` output flag for `cctv status` (Story 4.2)
+FR35: Epic 3 — link motion action rule to the installed VMD app's own event topic on legacy cameras (Story 3.7)
 
 ## Epic List
 
@@ -122,8 +138,14 @@ The user can scan their subnet and see a list of all reachable Axis cameras with
 ### Epic 3: Idempotent Configuration Convergence (`cctv apply`)
 The user can apply their config to all discovered cameras in a single command. Cameras already at desired state are skipped. One offline camera doesn't abort the rest. Output tells the user exactly what happened, per camera, per setting. Safe to re-run at any time.
 
-**FRs covered:** FR12, FR13, FR14, FR15, FR16, FR17, FR18, FR19, FR20, FR21, FR22, FR23, FR24, FR25, FR26
+**FRs covered:** FR12, FR13, FR14, FR15, FR16, FR17, FR18, FR19, FR20, FR21, FR22, FR23, FR24, FR25, FR26, FR28, FR35
 **NFRs addressed:** NFR2, NFR3, NFR7, NFR9, NFR10, NFR11, NFR12, NFR13
+
+### Epic 4: Camera Fleet Status Reporting (`cctv status`)
+The user can run a strictly read-only command that reports each discovered camera's live VAPIX state — motion detection app + settings, action rules/events, SMB share config, timezone, and recording retention — as a quick way to audit the fleet without cross-referencing `cameras.yaml` against multiple camera web UIs. Never calls any write/SET/SOAP-mutation VAPIX endpoint.
+
+**FRs covered:** FR29, FR30, FR31, FR32, FR33, FR34
+**NFRs addressed:** NFR3, NFR7, NFR8
 
 ## Epic 1: Installable Tool with Config Validation
 
@@ -266,7 +288,7 @@ So that I can quickly verify my fleet's reachability from the command line.
 
 The user can apply their config to all discovered cameras in a single command. Cameras already at desired state are skipped. One offline camera doesn't abort the rest. Output tells the user exactly what happened, per camera, per setting. Safe to re-run at any time.
 
-**FRs covered:** FR12, FR13, FR14, FR15, FR16, FR17, FR18, FR19, FR20, FR21, FR22, FR23, FR24, FR25, FR26
+**FRs covered:** FR12, FR13, FR14, FR15, FR16, FR17, FR18, FR19, FR20, FR21, FR22, FR23, FR24, FR25, FR26, FR28, FR35
 **NFRs addressed:** NFR2, NFR3, NFR7, NFR9, NFR10, NFR11, NFR12, NFR13
 
 ### Story 3.1: Read-Before-Write State Reconciliation
@@ -372,3 +394,103 @@ So that I know exactly what happened without needing to inspect anything else.
 **When** `cctv apply` exits
 **Then** the exit code is `1`
 **And** the summary line mentions the count of failed cameras with a re-run hint
+
+### Story 3.6: Legacy Camera VMD App Detection and Install
+
+As a home sysadmin,
+I want the tool to detect whether the AXIS Video Motion Detection app is installed on a camera and install it from a local `.eap` package if it's missing,
+So that motion detection can be configured on legacy cameras that don't ship with the app pre-installed, without a manual VAPIX/SOAP workaround per camera.
+
+**Acceptance Criteria:**
+
+**Given** `motion_detection.enabled: true` in config and the AXIS Video Motion Detection app is not present in the camera's installed-applications list
+**When** `cctv apply` runs and `motion_detection.app_package_path` is set in config
+**Then** the `.eap` file at that path is uploaded and installed on the camera via VAPIX
+**And** the app is started using whatever package `Name` the camera assigns it (not assumed to be a fixed string — different `.eap` versions register under different internal names, e.g. `vmd` vs `VideoMotionDetection`)
+**And** `motion_app_installed` is included in `CameraResult.settings_changed`
+
+**Given** the app is not installed and `motion_detection.app_package_path` is not set in config
+**When** `cctv apply` runs
+**Then** a clear `VapixError` is raised naming the camera IP and the missing config key, and no upload is attempted
+
+**Given** the app is already installed but its Status is `Stopped`
+**When** `cctv apply` runs
+**Then** the app is started via VAPIX (not re-uploaded)
+**And** `motion_app_started` is included in `CameraResult.settings_changed`
+
+**Given** the app is already installed and its Status is anything other than `Stopped` (e.g. `Running` or `Idle`)
+**When** `cctv apply` runs
+**Then** no install or start call is made, and the run is idempotent
+
+### Story 3.7: Legacy VMD App Event-Linked Action Rule
+
+As a home sysadmin,
+I want the motion-detection action rule on a legacy camera to trigger from the installed AXIS Video Motion Detection app's own event, not from a fixed built-in motion topic,
+So that recordings actually fire on cameras where `root.Motion` is only populated because Story 3.6 installed the app, instead of the rule silently assuming a built-in motion topic that may not apply to that app/firmware combination.
+
+**Acceptance Criteria:**
+
+**Given** `cctv apply` found the AXIS Video Motion Detection app already installed or had to install it this run (i.e. the camera needed the app to expose motion at all — the Story 3.6 install path)
+**When** the motion detection action rule is created or updated
+**Then** the rule's condition topic targets the installed app's own event topic, not the generic window-based `tns1:VideoAnalytics/tnsaxis:MotionDetection` topic used for cameras with native built-in motion
+
+**Given** a camera exposes `root.Motion` natively and never required the VMD app install step (built-in motion detection, per Story 3.1/3.3)
+**When** the motion detection action rule is created or updated
+**Then** the existing window-based topic behaviour is unchanged — this story only changes the topic used on the legacy-app-install path
+
+**Given** the exact event topic string published by `AXIS_Video_Motion_Detection_2_2_1.eap` has not yet been confirmed against real hardware
+**When** this story is implemented
+**Then** the topic constant is added marked `UNVERIFIED`, following the same pattern as `_MOTION_GROUP`/`_SMB_GROUP` before their Story 1.4/3.3 hardware verification, and the story cannot move to `done` until a real `cctv apply` run against a legacy camera is followed by an actual motion event and confirmed recording (not just a green mocked test suite — see Story 3.6's Dev Notes on hardware-only bugs the mocked suite missed)
+
+## Epic 4: Camera Fleet Status Reporting (`cctv status`)
+
+The user can run a strictly read-only command that reports each discovered camera's live VAPIX state — motion detection app + settings, action rules/events, SMB share config, timezone, and recording retention — as a quick way to audit the fleet without cross-referencing `cameras.yaml` against multiple camera web UIs. `status` never calls any write/SET/SOAP-mutation VAPIX endpoint; it is exactly as safe to run as `cctv list`.
+
+**FRs covered:** FR29, FR30, FR31, FR32, FR33, FR34
+**NFRs addressed:** NFR3, NFR7, NFR8
+
+### Story 4.1: Camera Status Collection and Text Report
+
+As a home sysadmin,
+I want `cctv status <config.yaml>` to print each discovered camera's current motion detection, action rules, SMB share, timezone, and retention settings,
+So that I can audit my fleet's live state from the terminal without opening any camera's web UI.
+
+**Acceptance Criteria:**
+
+**Given** a valid `cameras.yaml` and reachable cameras on the configured subnet
+**When** I run `cctv status cameras.yaml`
+**Then** every discovered camera is probed read-only (no `set_params`, `add_action_rule`, `add_action_configuration`, `upload_application`, or `start_application` call is ever made)
+**And** for each camera the output includes: motion app name/nice-name/status, motion enabled state + sensitivity + window extent, all configured action rules with their linked action configuration (name, trigger topic, target template, pre/post duration), SMB share IP/path/username (never password), current timezone, and recording retention in days
+
+**Given** a camera is unreachable or a VAPIX call for one camera fails mid-collection
+**When** `cctv status` runs across a multi-camera fleet
+**Then** that camera's block reports the failure reason (mirroring `CameraResult.status == FAILED` semantics from Epic 3) and the remaining cameras are still reported — one bad camera does not abort the whole run
+
+**Given** `--subnet <CIDR>` is passed
+**When** `cctv status cameras.yaml --subnet <CIDR>` runs
+**Then** the override subnet is used for discovery instead of the one in the config file (same behaviour as `list`/`apply`)
+
+**Given** no cameras are found on the subnet
+**When** `cctv status` completes
+**Then** the output states no cameras were found and the process exits with code 2 (same convention as `cctv list`)
+
+### Story 4.2: JSON Output for `cctv status`
+
+As a home sysadmin,
+I want a `--json` flag on `cctv status`,
+So that I can pipe fleet status into scripts or other tooling instead of parsing text.
+
+**Acceptance Criteria:**
+
+**Given** `cctv status cameras.yaml --json` is run
+**When** the command completes
+**Then** stdout is a single JSON array, one object per camera, with the same fields as the text report (motion, action rules, smb, timezone, retention) using stable, documented key names
+**And** no plaintext/human-formatted status lines are mixed into stdout — errors and diagnostics still go to stderr per NFR7/FR26
+
+**Given** a camera fails during collection
+**When** `--json` output is produced
+**Then** that camera's JSON object includes an `error` field describing the failure, consistent with the text report's failure case in Story 4.1
+
+**Given** `--json` is not passed
+**When** `cctv status` runs
+**Then** output is the human-readable text format from Story 4.1 (JSON is opt-in, not the default)

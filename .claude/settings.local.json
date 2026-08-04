@@ -36,7 +36,27 @@
       "Bash(.venv/Scripts/python -c ':*)",
       "Bash(cctv apply:*)",
       "Bash(pip show:*)",
-      "Bash(\"C:/Users/atotmakov/AppData/Local/Packages/PythonSoftwareFoundation.Python.3.11_qbz5n2kfra8p0/LocalCache/local-packages/Python311/Scripts/cctv.exe\" apply:*)"
+      "Bash(\"C:/Users/atotmakov/AppData/Local/Packages/PythonSoftwareFoundation.Python.3.11_qbz5n2kfra8p0/LocalCache/local-packages/Python311/Scripts/cctv.exe\" apply:*)",
+      "Bash(gh run:*)",
+      "Bash(gh api:*)",
+      "Bash(gh repo:*)",
+      "Bash(gh release:*)",
+      "Bash(curl *)",
+      "Bash(python3 -c ' *)",
+      "Bash(python3 -c \"import ntplib; print\\('ntplib ok'\\)\")",
+      "Bash(xargs -I{} curl -s --digest -u root:root \"http://192.168.1.62/axis-cgi/date.cgi?{}\")",
+      "Bash(python3 *)",
+      "Bash(cat C:/Users/atotmakov/Documents/GitHub/cctv/.github/workflows/*.yml)",
+      "Bash(find . -maxdepth 3 -not -path '*/\\\\.git*' -not -path '*/node_modules*' -not -path '*/__pycache__*')",
+      "Skill(artifact-design)",
+      "Artifact",
+      "Bash(xargs -I{} echo {})",
+      "Read(//tmp/**)",
+      "Bash(ssh-keyscan -p 22 -t rsa,ecdsa,ed25519 192.168.1.100)",
+      "Skill(fewer-permission-prompts)",
+      "Bash(ping -n 2 192.168.1.41)",
+      "Bash(ping -n 2 192.168.1.100)",
+      "Bash(.venv/Scripts/python.exe -m pytest tests/ -q)"
     ]
   }
 }

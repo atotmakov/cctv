@@ -6,7 +6,7 @@ import typer
 from requests.auth import HTTPDigestAuth
 
 from cctv.config import ConfigError, load_config
-from cctv import executor, reporter, scanner
+from cctv import executor, reporter, scanner, status
 
 app = typer.Typer()
 
@@ -73,6 +73,36 @@ def apply(
     cameras = scanner.scan(effective_subnet, auth, cfg.timeout)
     results = executor.apply_all(cameras, cfg, auth)
     exit_code = reporter.print_apply_results(results)
+    raise typer.Exit(code=exit_code)
+
+
+@app.command(name="status")
+def camera_status(
+    config: Path = typer.Argument(
+        ...,
+        exists=True,
+        file_okay=True,
+        dir_okay=False,
+        readable=True,
+        help="Path to cameras.yaml config file",
+    ),
+    subnet: Optional[str] = typer.Option(
+        None, "--subnet", help="Override subnet (CIDR)", callback=_validate_subnet
+    ),
+) -> None:
+    """Report live VAPIX status for all discovered cameras. Read-only — never modifies a camera."""
+    try:
+        cfg = load_config(config)
+    except ConfigError as e:
+        typer.echo(f"Error: {e}", err=True)
+        raise typer.Exit(code=2)
+    auth = HTTPDigestAuth(cfg.username, cfg.password)
+    effective_subnet = subnet or cfg.subnet
+    cameras = scanner.scan(effective_subnet, auth, cfg.timeout)
+    results = status.collect_all(cameras, cfg, auth)
+    exit_code = reporter.print_camera_status(results)
+    if not cameras:
+        raise typer.Exit(code=2)
     raise typer.Exit(code=exit_code)
 
 
