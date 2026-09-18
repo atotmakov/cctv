@@ -1,0 +1,702 @@
+meta:
+  description: Verified-good VAPIX baseline for the legacy-smb fleet (AXIS M3005 / P1204 / M2014-E).
+  generated: '2026-09-17'
+  firmware: 5.51.7.4
+  derived_from: parameters on which 192.168.1.79 (reference) and 192.168.1.60 (converged 2026-09-15) agree
+  param_count: 561
+  IMPORTANT: Reference only. `cctv apply` does NOT read this file - config.py ignores unknown keys, so
+    pasting it into cameras.yaml would look enforced while doing nothing.
+  secrets: 2 credential value(s) redacted; real values live in cameras.yaml (gitignored).
+critical_settings:
+  root.Image.TriggerDataEnabled:
+    value: 'no'
+    why: Keeps /usr/sbin/triggerd stopped. When yes, triggerd competes for CPU with the legacy VMD .eap
+      app on ARMv6 and causes 30-110 min blind windows with no logged error. This was the root cause of
+      the missed events on .60 (fixed 2026-09-15).
+  root.Image.I0.MPEG.UserDataEnabled:
+    value: 'no'
+    why: Same daemon family - stops per-frame user-data injection into the 1080p25 H.264 stream.
+  root.Motion:
+    value: <group must be EMPTY - no MX windows>
+    why: The legacy .eap keeps its own polygon config in vaconfig.cgi and ignores root.Motion. A window
+      here only keeps triggerd alive. reconciler._ensure_motion_window skips empty groups, so this survives
+      cctv apply.
+  root.Time.POSIXTimeZone:
+    value: MSK-3
+    why: Moscow, no DST.
+  root.Time.DST.Enabled:
+    value: 'no'
+    why: MSK-3 has no DST rule; leaving this on is inconsistent across the fleet.
+  root.RemoteService.Enabled:
+    value: 'no'
+    why: AXIS O3C one-click remote service not used on this fleet.
+  root.Storage.S1.CleanupMaxAge:
+    value: '33'
+    why: 'NOTE: cameras.yaml sets recording_retention_days: 0 (unlimited) but both cameras run 33. cctv
+      apply is not converging this - known drift, unresolved.'
+expected_non_param_state:
+  applications:
+  - Name: VideoMotionDetection
+    NiceName: AXIS Video Motion Detection
+    Version: '2.2'
+    Status: Running
+  action_rules:
+  - name: cctv_motion_record
+    enabled: true
+    topic: tns1:RuleEngine/tnsaxis:VideoMotionDetection/motion//.
+    note: exactly one rule - no ACC_LED_* or other leftovers
+  action_configurations:
+  - name: cctv_motion_record
+    template: com.axis.action.unlimited.recording.storage
+    pre_duration: 5000
+    post_duration: 2000
+    storage_id: NetworkShare
+    note: matches cameras.yaml pre_trigger_time 5 / post_trigger_time 2
+  recipients: none - an empty recipients dir; a networkshare recipient implies a stray duplicate share
+  network_shares: exactly ONE root.NetworkShare.Nx entry; more than one means duplicate CIFS mounts
+  cifs_mounts: exactly 2 in /proc/mounts (NetworkShareN + NetworkShare); a third means a duplicate share
+  processes: /usr/sbin/triggerd MUST NOT be running
+per_camera_identity_do_not_normalise:
+  root.Network.Bonjour.FriendlyName:
+    axis-lift_192.168.1.60: AXIS M3005 - 00408CF0FE28 - lift
+    axis-door_192.168.1.79: AXIS M3005 - ACCC8E368EE5
+  root.Network.DHCP.VendorClass:
+    axis-lift_192.168.1.60: AXIS,Network Camera,M3005,5.40.5.5
+    axis-door_192.168.1.79: AXIS,Network Camera,M3005,5.51.7.4
+  root.Network.HostName:
+    axis-lift_192.168.1.60: axis-lift
+    axis-door_192.168.1.79: axis-door
+  root.Network.IPAddress:
+    axis-lift_192.168.1.60: 192.168.1.110
+    axis-door_192.168.1.79: 192.168.1.111
+  root.Network.RTP.R0.VideoAddress:
+    axis-lift_192.168.1.60: 239.192.254.40
+    axis-door_192.168.1.79: 239.246.142.229
+  root.Network.UPnP.FriendlyName:
+    axis-lift_192.168.1.60: AXIS M3005 - 00408CF0FE28 - lift
+    axis-door_192.168.1.79: AXIS M3005 - ACCC8E368EE5
+  root.Network.VolatileHostName.HostName:
+    axis-lift_192.168.1.60: axis-lift
+    axis-door_192.168.1.79: axis-door
+  root.Network.ZeroConf.IPAddress:
+    axis-lift_192.168.1.60: 169.254.184.133
+    axis-door_192.168.1.79: 169.254.30.216
+  root.Network.eth0.IPAddress:
+    axis-lift_192.168.1.60: 192.168.1.60
+    axis-door_192.168.1.79: 192.168.1.79
+  root.Network.eth0.MACAddress:
+    axis-lift_192.168.1.60: 00:40:8C:F0:FE:28
+    axis-door_192.168.1.79: AC:CC:8E:36:8E:E5
+  root.NetworkShare.N0.Address:
+    axis-lift_192.168.1.60: <absent>
+    axis-door_192.168.1.79: 192.168.1.100
+  root.NetworkShare.N0.Name:
+    axis-lift_192.168.1.60: <absent>
+    axis-door_192.168.1.79: cctv
+  root.NetworkShare.N0.Password:
+    axis-lift_192.168.1.60: <absent>
+    axis-door_192.168.1.79: <REDACTED - see cameras.yaml>
+  root.NetworkShare.N0.Port:
+    axis-lift_192.168.1.60: <absent>
+    axis-door_192.168.1.79: '0'
+  root.NetworkShare.N0.Share:
+    axis-lift_192.168.1.60: <absent>
+    axis-door_192.168.1.79: cctv
+  root.NetworkShare.N0.ShareId:
+    axis-lift_192.168.1.60: <absent>
+    axis-door_192.168.1.79: '38822'
+  root.NetworkShare.N0.Username:
+    axis-lift_192.168.1.60: <absent>
+    axis-door_192.168.1.79: cctv
+  root.NetworkShare.N1.Address:
+    axis-lift_192.168.1.60: 192.168.1.100
+    axis-door_192.168.1.79: <absent>
+  root.NetworkShare.N1.Name:
+    axis-lift_192.168.1.60: cctv
+    axis-door_192.168.1.79: <absent>
+  root.NetworkShare.N1.Password:
+    axis-lift_192.168.1.60: <REDACTED - see cameras.yaml>
+    axis-door_192.168.1.79: <absent>
+  root.NetworkShare.N1.Port:
+    axis-lift_192.168.1.60: '0'
+    axis-door_192.168.1.79: <absent>
+  root.NetworkShare.N1.Share:
+    axis-lift_192.168.1.60: cctv
+    axis-door_192.168.1.79: <absent>
+  root.NetworkShare.N1.ShareId:
+    axis-lift_192.168.1.60: '10991'
+    axis-door_192.168.1.79: <absent>
+  root.NetworkShare.N1.Username:
+    axis-lift_192.168.1.60: cctv
+    axis-door_192.168.1.79: <absent>
+  root.Notify.KnownIP:
+    axis-lift_192.168.1.60: 192.168.1.60
+    axis-door_192.168.1.79: 192.168.1.79
+  root.Properties.System.SerialNumber:
+    axis-lift_192.168.1.60: 00408CF0FE28
+    axis-door_192.168.1.79: ACCC8E368EE5
+  root.Storage.S1.DeviceNode:
+    axis-lift_192.168.1.60: NetworkShare:/com/axis/NetworkShare/Device/1
+    axis-door_192.168.1.79: NetworkShare:/com/axis/NetworkShare/Device/0
+full_baseline:
+  root.Bandwidth.Limit: '0'
+  root.Brand.Brand: AXIS
+  root.Brand.ProdFullName: AXIS M3005 Network Camera
+  root.Brand.ProdNbr: M3005
+  root.Brand.ProdShortName: AXIS M3005
+  root.Brand.ProdType: Network Camera
+  root.Brand.WebURL: http://www.axis.com/
+  root.HTTPS.Ciphers: AES256-SHA:AES128-SHA:DES-CBC3-SHA
+  root.HTTPS.Enabled: 'no'
+  root.HTTPS.Port: '443'
+  root.Image.DateFormat: YYYY-MM-DD
+  root.Image.I0.Appearance.Compression: '30'
+  root.Image.I0.Appearance.MirrorEnabled: 'no'
+  root.Image.I0.Appearance.Resolution: 1920x1080
+  root.Image.I0.Appearance.Rotation: '0'
+  root.Image.I0.Enabled: 'yes'
+  root.Image.I0.MPEG.Complexity: '50'
+  root.Image.I0.MPEG.ConfigHeaderInterval: '1'
+  root.Image.I0.MPEG.H264.PSEnabled: 'no'
+  root.Image.I0.MPEG.ICount: '1'
+  root.Image.I0.MPEG.PCount: '31'
+  root.Image.I0.MPEG.UserDataEnabled: 'no'
+  root.Image.I0.MPEG.UserDataInterval: '1'
+  root.Image.I0.Name: View Area 1
+  root.Image.I0.Overlay.Enabled: 'no'
+  root.Image.I0.Overlay.MaskWindows.Color: black
+  root.Image.I0.Overlay.MaskWindows.M0.Enabled: 'no'
+  root.Image.I0.Overlay.MaskWindows.M0.Height: '0'
+  root.Image.I0.Overlay.MaskWindows.M0.Name: Mask 0
+  root.Image.I0.Overlay.MaskWindows.M0.Width: '0'
+  root.Image.I0.Overlay.MaskWindows.M0.XPos: '0'
+  root.Image.I0.Overlay.MaskWindows.M0.YPos: '0'
+  root.Image.I0.Overlay.MaskWindows.M1.Enabled: 'no'
+  root.Image.I0.Overlay.MaskWindows.M1.Height: '0'
+  root.Image.I0.Overlay.MaskWindows.M1.Name: Mask 1
+  root.Image.I0.Overlay.MaskWindows.M1.Width: '0'
+  root.Image.I0.Overlay.MaskWindows.M1.XPos: '0'
+  root.Image.I0.Overlay.MaskWindows.M1.YPos: '0'
+  root.Image.I0.Overlay.MaskWindows.M2.Enabled: 'no'
+  root.Image.I0.Overlay.MaskWindows.M2.Height: '0'
+  root.Image.I0.Overlay.MaskWindows.M2.Name: Mask 2
+  root.Image.I0.Overlay.MaskWindows.M2.Width: '0'
+  root.Image.I0.Overlay.MaskWindows.M2.XPos: '0'
+  root.Image.I0.Overlay.MaskWindows.M2.YPos: '0'
+  root.Image.I0.Overlay.XPos: '0'
+  root.Image.I0.Overlay.YPos: '0'
+  root.Image.I0.RateControl.MaxBitrate: '0'
+  root.Image.I0.RateControl.Mode: vbr
+  root.Image.I0.RateControl.Priority: framerate
+  root.Image.I0.RateControl.TargetBitrate: '0'
+  root.Image.I0.SizeControl.MaxFrameSize: '0'
+  root.Image.I0.Source: '0'
+  root.Image.I0.Stream.Duration: '0'
+  root.Image.I0.Stream.FPS: '0'
+  root.Image.I0.Stream.NbrOfFrames: '0'
+  root.Image.I0.Text.BGColor: black
+  root.Image.I0.Text.ClockEnabled: 'no'
+  root.Image.I0.Text.Color: white
+  root.Image.I0.Text.DateEnabled: 'no'
+  root.Image.I0.Text.Position: top
+  root.Image.I0.Text.String: ''
+  root.Image.I0.Text.TextEnabled: 'no'
+  root.Image.I0.Text.TextSize: small
+  root.Image.I0.TriggerData.IOEnabled: 'yes'
+  root.Image.I0.TriggerData.MotionDetectionEnabled: 'yes'
+  root.Image.I0.TriggerData.MotionLevelEnabled: 'no'
+  root.Image.I0.TriggerData.TamperingEnabled: 'yes'
+  root.Image.I0.TriggerData.UserTriggers: ''
+  root.Image.MaxViewers: '20'
+  root.Image.MotionDetection: 'no'
+  root.Image.NbrOfConfigs: '1'
+  root.Image.OverlayPath: /etc/overlays/axis(128x44).ovl
+  root.Image.OwnDateFormat: '%F'
+  root.Image.OwnDateFormatEnabled: 'no'
+  root.Image.OwnTimeFormat: '%T'
+  root.Image.OwnTimeFormatEnabled: 'no'
+  root.Image.PrivacyMaskType: none
+  root.Image.RFCCompliantMultipartEnabled: 'yes'
+  root.Image.Referrers: ''
+  root.Image.ReferrersEnabled: 'no'
+  root.Image.TimeFormat: '24'
+  root.Image.TimeResolution: '1'
+  root.Image.TriggerDataEnabled: 'no'
+  root.ImageSource.I0.CaptureFrequency: 50Hz
+  root.ImageSource.I0.Name: Camera
+  root.ImageSource.I0.Sensor.AspectRatio: '16:9'
+  root.ImageSource.I0.Sensor.BacklightCompensation: 'yes'
+  root.ImageSource.I0.Sensor.Brightness: '50'
+  root.ImageSource.I0.Sensor.ColorDesaturation: '100'
+  root.ImageSource.I0.Sensor.ColorLevel: '50'
+  root.ImageSource.I0.Sensor.Contrast: '50'
+  root.ImageSource.I0.Sensor.DynamicContrastEnabled: 'no'
+  root.ImageSource.I0.Sensor.Exposure: auto
+  root.ImageSource.I0.Sensor.ExposurePriority: '50'
+  root.ImageSource.I0.Sensor.ExposureValue: '50'
+  root.ImageSource.I0.Sensor.Sharpness: '50'
+  root.ImageSource.I0.Sensor.WhiteBalance: auto
+  root.ImageSource.MotionDetection: 'yes'
+  root.ImageSource.NbrOfSources: '1'
+  root.Layout.AMCRecordMedia: '0'
+  root.Layout.Axis: 'yes'
+  root.Layout.CustomLink.C0.Enabled: 'no'
+  root.Layout.CustomLink.C0.Name: Custom link 1
+  root.Layout.CustomLink.C0.URL: http://
+  root.Layout.CustomLink.C0.Usage: cgi
+  root.Layout.CustomLink.C1.Enabled: 'no'
+  root.Layout.CustomLink.C1.Name: Custom link 2
+  root.Layout.CustomLink.C1.URL: http://
+  root.Layout.CustomLink.C1.Usage: cgi
+  root.Layout.CustomLink.C2.Enabled: 'no'
+  root.Layout.CustomLink.C2.Name: Custom link 3
+  root.Layout.CustomLink.C2.URL: http://
+  root.Layout.CustomLink.C2.Usage: cgi
+  root.Layout.CustomLink.C3.Enabled: 'no'
+  root.Layout.CustomLink.C3.Name: Custom link 4
+  root.Layout.CustomLink.C3.URL: http://
+  root.Layout.CustomLink.C3.Usage: cgi
+  root.Layout.DefaultJoystickMode: 'no'
+  root.Layout.DefaultStreamProfile: ''
+  root.Layout.DefaultVideoFormat: mjpeg
+  root.Layout.EnableBasicSetup: 'yes'
+  root.Layout.H264InstallationEnabled: 'yes'
+  root.Layout.InstantReplayEnabled: 'no'
+  root.Layout.InstantReplayTimeOffset: '30'
+  root.Layout.OwnHomePageEnabled: 'no'
+  root.Layout.OwnHomePagePath: dummy
+  root.Layout.PlainConfigEnabled: 'no'
+  root.Layout.SetupLinkEnabled: 'yes'
+  root.Layout.ShowAMCToolbar: 'yes'
+  root.Layout.ShowRelCrossEnabled: 'yes'
+  root.Layout.ShowVideoFormatDropDown: 'yes'
+  root.Layout.SnapshotEnabled: 'no'
+  root.Layout.TemperatureUnit: C
+  root.Layout.Trigger.T0.Enabled: 'no'
+  root.Layout.ViewerIE: activex
+  root.Layout.ViewerOther: spush
+  root.Log.Access.Critical: detailed
+  root.Log.Access.Informational: 'off'
+  root.Log.Access.MaxSize: '40000'
+  root.Log.Access.Warning: detailed
+  root.Log.System.Critical: 'on'
+  root.Log.System.Informational: 'on'
+  root.Log.System.MaxSize: '40000'
+  root.Log.System.Warning: 'on'
+  root.MailLogd.LogSendLevel: '0'
+  root.MailLogd.ToEmail: ''
+  root.Network.ARPPingIPAddress.Enabled: 'yes'
+  root.Network.Autoneg: normal
+  root.Network.AxisNS.CheckIPAddress: 0.0.0.0
+  root.Network.AxisNS.CheckPeriod: '10'
+  root.Network.AxisNS.CheckTTL: '0'
+  root.Network.AxisNS.Enabled: 'no'
+  root.Network.AxisNS.LockButton: 'no'
+  root.Network.AxisNS.ServerLink: www.axiscam.net
+  root.Network.AxisNS.ServerList: www0.axiscam.net,195.60.68.29,www1.axiscam.net,195.60.68.30
+  root.Network.AxisNS.ServerPath: reg_cam.php
+  root.Network.AxisNS.UpdatePeriod: '0'
+  root.Network.Bonjour.Enabled: 'yes'
+  root.Network.BootProto: dhcp
+  root.Network.Broadcast: 192.168.1.255
+  root.Network.DHCP.Fqdn: ''
+  root.Network.DHCP.IPCheckEnabled: 'yes'
+  root.Network.DHCP.Retries: '20'
+  root.Network.DHCP.StoreIPAddresseth0: 'no'
+  root.Network.DHCP.Timeout: '0'
+  root.Network.DNSServer1: 0.0.0.0
+  root.Network.DNSServer2: 0.0.0.0
+  root.Network.DNSUpdate.DNSName: ''
+  root.Network.DNSUpdate.Enabled: 'no'
+  root.Network.DNSUpdate.TTL: '30'
+  root.Network.DefaultRouter: 192.168.1.1
+  root.Network.DomainName: ''
+  root.Network.Enabled: 'yes'
+  root.Network.FTP.Enabled: 'yes'
+  root.Network.Filter.Enabled: 'no'
+  root.Network.Filter.Input.AcceptAddresses: ''
+  root.Network.Filter.Input.Policy: allow
+  root.Network.Filter.Log.Enabled: 'no'
+  root.Network.HTTP.AuthenticationPolicy: basic_digest
+  root.Network.HTTP.AuthenticationPolicySet: 'yes'
+  root.Network.HTTP.AuthenticationWithQop: 'no'
+  root.Network.IPv6.AcceptRA: 'yes'
+  root.Network.IPv6.DHCPv6: auto
+  root.Network.IPv6.DefaultRouter: ''
+  root.Network.IPv6.Enabled: 'no'
+  root.Network.IPv6.IPAddress: ''
+  root.Network.Interface.I0.Link.MTU: '1500'
+  root.Network.Interface.I0.SystemDevice: eth0
+  root.Network.Interface.I0.dot1x.EAPOLVersion: '1'
+  root.Network.Interface.I0.dot1x.EAPTLS.Identity: xxx
+  root.Network.Interface.I0.dot1x.EAPTLS.PrivateKeyPassword: '*****'
+  root.Network.Interface.I0.dot1x.Enabled: 'no'
+  root.Network.Interface.I0.dot1x.Status: Stopped
+  root.Network.Media: auto
+  root.Network.QoS.Class1.DSCP: '0'
+  root.Network.QoS.Class1.Desc: AxisLiveVideo
+  root.Network.QoS.Class2.DSCP: '0'
+  root.Network.QoS.Class2.Desc: AxisEventAlarm
+  root.Network.QoS.Class3.DSCP: '0'
+  root.Network.QoS.Class3.Desc: AxisManagement
+  root.Network.QoS.Class4.DSCP: '0'
+  root.Network.QoS.Class4.Desc: AxisRemoteService
+  root.Network.RTP.EndPort: '50999'
+  root.Network.RTP.NbrOfRTPGroups: '1'
+  root.Network.RTP.R0.AlwaysMulticastProfile: videocodec=h264
+  root.Network.RTP.R0.AlwaysMulticastVideo: 'no'
+  root.Network.RTP.R0.TTL: '5'
+  root.Network.RTP.R0.VideoPort: '0'
+  root.Network.RTP.StartPort: '50000'
+  root.Network.RTP.VideoDSCP: '0'
+  root.Network.RTSP.AllowClientTransportSettings: 'no'
+  root.Network.RTSP.AllowPathAsURL: 'yes'
+  root.Network.RTSP.AuthenticateOverHTTP: 'no'
+  root.Network.RTSP.Enabled: 'yes'
+  root.Network.RTSP.Port: '554'
+  root.Network.RTSP.ProtViewer: password
+  root.Network.RTSP.Timeout: '60'
+  root.Network.Resolver.NameServer1: 192.168.1.100
+  root.Network.Resolver.NameServer2: ''
+  root.Network.Resolver.NameServerList: '192.168.1.100 '
+  root.Network.Resolver.ObtainFromDHCP: 'yes'
+  root.Network.Resolver.Search: ''
+  root.Network.Routing.DefaultRouter: 192.168.1.100
+  root.Network.Routing.IPv6.DefaultRouter: ''
+  root.Network.SubnetMask: 255.255.255.0
+  root.Network.UPnP.Enabled: 'yes'
+  root.Network.UPnP.NATTraversal.Active: 'no'
+  root.Network.UPnP.NATTraversal.Enabled: 'no'
+  root.Network.UPnP.NATTraversal.ExternalIPAddress: ''
+  root.Network.UPnP.NATTraversal.MaxPort: '65535'
+  root.Network.UPnP.NATTraversal.MinPort: '32768'
+  root.Network.UPnP.NATTraversal.Router: ''
+  root.Network.VolatileHostName.ObtainFromDHCP: 'yes'
+  root.Network.ZeroConf.Enabled: 'yes'
+  root.Network.ZeroConf.SubnetMask: 255.255.0.0
+  root.Network.eth0.Broadcast: 192.168.1.255
+  root.Network.eth0.IPv6.IPAddresses: ''
+  root.Network.eth0.SubnetMask: 255.255.255.0
+  root.Network.tcpECN: '1'
+  root.Notify.AtBoot: 'no'
+  root.Notify.FTP.Enabled: 'no'
+  root.Notify.FTP.HostName: ''
+  root.Notify.FTP.PassiveMode: 'no'
+  root.Notify.FTP.Password: ''
+  root.Notify.FTP.Port: '21'
+  root.Notify.FTP.UploadPath: ''
+  root.Notify.FTP.UserName: ''
+  root.Notify.HTTP.Custom: ''
+  root.Notify.HTTP.Enabled: 'no'
+  root.Notify.HTTP.Password: ''
+  root.Notify.HTTP.Proxy: ''
+  root.Notify.HTTP.ProxyPass: ''
+  root.Notify.HTTP.ProxyPort: ''
+  root.Notify.HTTP.ProxyUser: ''
+  root.Notify.HTTP.URL: http://
+  root.Notify.HTTP.UserName: ''
+  root.Notify.KnownIPV6: ''
+  root.Notify.SMTP.Enabled: 'no'
+  root.Notify.SMTP.FromEmail: ''
+  root.Notify.SMTP.Subject: ''
+  root.Notify.SMTP.ToEmail: ''
+  root.Notify.TextField: Your text here
+  root.Notify.TextType: simple
+  root.PTZ.BoaProtPTZOperator: password
+  root.PTZ.CamPorts.Cam1Port: '1'
+  root.PTZ.CameraDefault: '1'
+  root.PTZ.ImageSource.I0.PTZEnabled: 'false'
+  root.PTZ.Limit.L1.MaxPan: '180'
+  root.PTZ.Limit.L1.MaxTilt: '180'
+  root.PTZ.Limit.L1.MaxZoom: '9999'
+  root.PTZ.Limit.L1.MinPan: '-180'
+  root.PTZ.Limit.L1.MinTilt: '-180'
+  root.PTZ.Limit.L1.MinZoom: '1'
+  root.PTZ.NbrOfCameras: '1'
+  root.PTZ.NbrOfSerPorts: '0'
+  root.PTZ.PTZDriverStatuses.Driver1Status: '3'
+  root.PTZ.Preset.P0.HomePosition: '1'
+  root.PTZ.Preset.P0.ImageSource: '0'
+  root.PTZ.Preset.P0.Name: ''
+  root.PTZ.Preset.P0.Position.P1.Data: tilt=0.000000:pan=0.000000:zoom=1.000000
+  root.PTZ.Preset.P0.Position.P1.Name: Home
+  root.PTZ.Support.S1.AbsoluteBrightness: 'false'
+  root.PTZ.Support.S1.AbsoluteFocus: 'false'
+  root.PTZ.Support.S1.AbsoluteIris: 'false'
+  root.PTZ.Support.S1.AbsolutePan: 'true'
+  root.PTZ.Support.S1.AbsoluteTilt: 'true'
+  root.PTZ.Support.S1.AbsoluteZoom: 'true'
+  root.PTZ.Support.S1.ActionNotification: 'true'
+  root.PTZ.Support.S1.AreaZoom: 'true'
+  root.PTZ.Support.S1.AutoFocus: 'false'
+  root.PTZ.Support.S1.AutoIrCutFilter: 'false'
+  root.PTZ.Support.S1.AutoIris: 'false'
+  root.PTZ.Support.S1.Auxiliary: 'false'
+  root.PTZ.Support.S1.BackLight: 'false'
+  root.PTZ.Support.S1.ContinuousBrightness: 'false'
+  root.PTZ.Support.S1.ContinuousFocus: 'false'
+  root.PTZ.Support.S1.ContinuousIris: 'false'
+  root.PTZ.Support.S1.ContinuousPan: 'true'
+  root.PTZ.Support.S1.ContinuousTilt: 'true'
+  root.PTZ.Support.S1.ContinuousZoom: 'true'
+  root.PTZ.Support.S1.DevicePreset: 'false'
+  root.PTZ.Support.S1.DigitalZoom: 'false'
+  root.PTZ.Support.S1.GenericHTTP: 'false'
+  root.PTZ.Support.S1.IrCutFilter: 'false'
+  root.PTZ.Support.S1.JoyStickEmulation: 'true'
+  root.PTZ.Support.S1.LensOffset: 'false'
+  root.PTZ.Support.S1.OSDMenu: 'false'
+  root.PTZ.Support.S1.ProportionalSpeed: 'true'
+  root.PTZ.Support.S1.RelativeBrightness: 'false'
+  root.PTZ.Support.S1.RelativeFocus: 'false'
+  root.PTZ.Support.S1.RelativeIris: 'false'
+  root.PTZ.Support.S1.RelativePan: 'true'
+  root.PTZ.Support.S1.RelativeTilt: 'true'
+  root.PTZ.Support.S1.RelativeZoom: 'true'
+  root.PTZ.Support.S1.ServerPreset: 'true'
+  root.PTZ.Support.S1.SpeedCtl: 'true'
+  root.PTZ.UserAdv.U1.MoveSpeed: '100'
+  root.PTZ.UserCtlQueue.U0.Priority: '10'
+  root.PTZ.UserCtlQueue.U0.TimeoutTime: '60'
+  root.PTZ.UserCtlQueue.U0.TimeoutType: activity
+  root.PTZ.UserCtlQueue.U0.UseCookie: 'yes'
+  root.PTZ.UserCtlQueue.U0.UserGroup: Administrator
+  root.PTZ.UserCtlQueue.U1.Priority: '30'
+  root.PTZ.UserCtlQueue.U1.TimeoutTime: '60'
+  root.PTZ.UserCtlQueue.U1.TimeoutType: activity
+  root.PTZ.UserCtlQueue.U1.UseCookie: 'yes'
+  root.PTZ.UserCtlQueue.U1.UserGroup: Operator
+  root.PTZ.UserCtlQueue.U2.Priority: '50'
+  root.PTZ.UserCtlQueue.U2.TimeoutTime: '60'
+  root.PTZ.UserCtlQueue.U2.TimeoutType: timespan
+  root.PTZ.UserCtlQueue.U2.UseCookie: 'yes'
+  root.PTZ.UserCtlQueue.U2.UserGroup: Viewer
+  root.PTZ.UserCtlQueue.U3.Priority: '20'
+  root.PTZ.UserCtlQueue.U3.TimeoutTime: '20'
+  root.PTZ.UserCtlQueue.U3.TimeoutType: activity
+  root.PTZ.UserCtlQueue.U3.UseCookie: 'no'
+  root.PTZ.UserCtlQueue.U3.UserGroup: Event
+  root.PTZ.UserCtlQueue.U4.Priority: '40'
+  root.PTZ.UserCtlQueue.U4.TimeoutTime: '60'
+  root.PTZ.UserCtlQueue.U4.TimeoutType: infinity
+  root.PTZ.UserCtlQueue.U4.UseCookie: 'no'
+  root.PTZ.UserCtlQueue.U4.UserGroup: Guardtour
+  root.PTZ.UserCtlQueue.U5.Priority: '35'
+  root.PTZ.UserCtlQueue.U5.TimeoutTime: '60'
+  root.PTZ.UserCtlQueue.U5.TimeoutType: infinity
+  root.PTZ.UserCtlQueue.U5.UseCookie: 'no'
+  root.PTZ.UserCtlQueue.U5.UserGroup: Autotracking
+  root.PTZ.UserCtlQueue.U6.Priority: '1'
+  root.PTZ.UserCtlQueue.U6.TimeoutTime: '60'
+  root.PTZ.UserCtlQueue.U6.TimeoutType: activity
+  root.PTZ.UserCtlQueue.U6.UseCookie: 'no'
+  root.PTZ.UserCtlQueue.U6.UserGroup: Onvif
+  root.PTZ.Various.V1.CtlQueueLimit: '20'
+  root.PTZ.Various.V1.CtlQueuePollTime: '20'
+  root.PTZ.Various.V1.CtlQueueing: 'false'
+  root.PTZ.Various.V1.HomePresetSet: 'true'
+  root.PTZ.Various.V1.Locked: 'true'
+  root.PTZ.Various.V1.MaxProportionalSpeed: '200'
+  root.PTZ.Various.V1.PanEnabled: 'true'
+  root.PTZ.Various.V1.ProportionalSpeedEnabled: 'true'
+  root.PTZ.Various.V1.ReturnToOverview: '30'
+  root.PTZ.Various.V1.SpeedCtlEnabled: 'true'
+  root.PTZ.Various.V1.TiltEnabled: 'true'
+  root.PTZ.Various.V1.ZoomEnabled: 'true'
+  root.Properties.API.HTTP.AdminPath: /operator/basic.shtml
+  root.Properties.API.HTTP.Version: '3'
+  root.Properties.API.Metadata.Metadata: 'yes'
+  root.Properties.API.Metadata.Version: '1.0'
+  root.Properties.API.RTSP.RTSPAuth: 'yes'
+  root.Properties.API.RTSP.Version: '2.01'
+  root.Properties.API.WebService.ONVIF.ONVIF: 'yes'
+  root.Properties.API.WebService.ONVIF.Version: '1.02'
+  root.Properties.API.WebService.WebService: 'yes'
+  root.Properties.AlwaysMulticast.AlwaysMulticast: 'yes'
+  root.Properties.EmbeddedDevelopment.CacheSize: '8388608'
+  root.Properties.EmbeddedDevelopment.DefaultCacheSize: '24117248'
+  root.Properties.EmbeddedDevelopment.EmbeddedDevelopment: 'yes'
+  root.Properties.EmbeddedDevelopment.Version: '1.40'
+  root.Properties.Firmware.BuildDate: Apr 13 2021 13:29
+  root.Properties.Firmware.BuildNumber: '1'
+  root.Properties.Firmware.Version: 5.51.7.4
+  root.Properties.GuardTour.GuardTour: 'yes'
+  root.Properties.GuardTour.RecordedTour: 'no'
+  root.Properties.HTTPS.HTTPS: 'yes'
+  root.Properties.Image.Format: jpeg,mjpeg,h264
+  root.Properties.Image.H264.Profiles: Main
+  root.Properties.Image.NbrOfViews: '1'
+  root.Properties.Image.Resolution: 1280x960,1024x768,800x600,640x480,480x360,320x240,1280x1024,1920x1080,1280x720,640x360,352x240
+  root.Properties.Image.Rotation: 0,90,180,270
+  root.Properties.LEDControl.LEDControl: 'yes'
+  root.Properties.LocalStorage.ContinuousRecording: 'yes'
+  root.Properties.LocalStorage.FailOverRecording: 'yes'
+  root.Properties.LocalStorage.LocalStorage: 'yes'
+  root.Properties.LocalStorage.NbrOfContinuousRecordingProfiles: '1'
+  root.Properties.LocalStorage.SDCard: 'yes'
+  root.Properties.LocalStorage.Version: '1.00'
+  root.Properties.Motion.MaxNbrOfWindows: '10'
+  root.Properties.Motion.Motion: 'yes'
+  root.Properties.NetworkShare.CIFS: 'yes'
+  root.Properties.NetworkShare.IPV6: 'yes'
+  root.Properties.NetworkShare.NetworkShare: 'yes'
+  root.Properties.PTZ.DigitalPTZ: 'yes'
+  root.Properties.PTZ.DriverManagement: 'no'
+  root.Properties.PTZ.PTZ: 'yes'
+  root.Properties.PrivacyMask.MaxNbrOfPrivacyMasks: '10'
+  root.Properties.PrivacyMask.PrivacyMask: 'no'
+  root.Properties.RTC.RTC: 'yes'
+  root.Properties.RemoteService.RemoteService: 'no'
+  root.Properties.Serial.Serial: 'no'
+  root.Properties.System.Architecture: armv6l
+  root.Properties.System.HardwareID: 1A7
+  root.Properties.System.Language: English
+  root.Properties.System.LanguageType: default
+  root.Properties.Tampering.Tampering: 'yes'
+  root.Properties.TemperatureSensor.Fan: 'no'
+  root.Properties.TemperatureSensor.Heater: 'no'
+  root.Properties.TemperatureSensor.TemperatureControl: 'yes'
+  root.Properties.TemperatureSensor.TemperatureSensor: 'no'
+  root.Properties.VirtualInput.VirtualInput: 'yes'
+  root.Recording.DefaultDiskId: SD_DISK
+  root.Recording.DefaultSplitDuration: '300'
+  root.RemoteService.BackOffFactorMin: '2'
+  root.RemoteService.BackOffFactorSpan: '6'
+  root.RemoteService.BackOffMaxSec: '20'
+  root.RemoteService.ClientCert: ''
+  root.RemoteService.DSCP: '0'
+  root.RemoteService.Enabled: 'no'
+  root.RemoteService.LogFile: syslog
+  root.RemoteService.ProxyAuth: ''
+  root.RemoteService.ProxyDispatcherOnly: 'no'
+  root.RemoteService.ProxyLogin: ''
+  root.RemoteService.ProxyPassword: ''
+  root.RemoteService.ProxyPort: '3128'
+  root.RemoteService.ProxyServer: ''
+  root.RemoteService.ServerList: dispatchse1-st.axis.com:443,dispatchse1-st.axis.com:80,195.60.68.120:443,195.60.68.120:80,dispatchse2-st.axis.com:443,dispatchse2-st.axis.com:80,195.60.68.121:443,195.60.68.121:80,dispatcher-st.axis.com:443,dispatcher-st.axis.com:80,dispatchus1-st.axis.com:443,dispatchus1-st.axis.com:80,dispatchjp1-st.axis.com:443,dispatchjp1-st.axis.com:80
+  root.SMTP.Authentication.A1.Enabled: 'no'
+  root.SMTP.Authentication.A1.POPServer: ''
+  root.SMTP.Authentication.A1.Password: ''
+  root.SMTP.Authentication.A1.UsePOP: 'no'
+  root.SMTP.Authentication.A1.UserName: ''
+  root.SMTP.Authentication.A1.WeakestMethod: Login
+  root.SMTP.Authentication.A2.Enabled: 'no'
+  root.SMTP.Authentication.A2.POPServer: ''
+  root.SMTP.Authentication.A2.Password: ''
+  root.SMTP.Authentication.A2.UsePOP: 'no'
+  root.SMTP.Authentication.A2.UserName: ''
+  root.SMTP.Authentication.A2.WeakestMethod: Login
+  root.SMTP.FromEmail: ''
+  root.SMTP.MailServer1: ''
+  root.SMTP.MailServer2: ''
+  root.SMTP.MailServerPort1: '25'
+  root.SMTP.MailServerPort2: '25'
+  root.SMTP.MailServerSSL1: 'no'
+  root.SMTP.MailServerSSL2: 'no'
+  root.SMTP.SSL.S1.ClientCertificate: ''
+  root.SMTP.SSL.S1.ClientPrivateKey: ''
+  root.SMTP.SSL.S1.ClientPrivateKeyPasswd: ''
+  root.SMTP.SSL.S1.RootCertificate: ''
+  root.SMTP.SSL.S2.ClientCertificate: ''
+  root.SMTP.SSL.S2.ClientPrivateKey: ''
+  root.SMTP.SSL.S2.ClientPrivateKeyPasswd: ''
+  root.SMTP.SSL.S2.RootCertificate: ''
+  root.SNMP.DSCP: '0'
+  root.SNMP.Enabled: 'no'
+  root.SNMP.EngineBoots: '1'
+  root.SNMP.InitialUserPasswd: '*****'
+  root.SNMP.InitialUserPasswdSet: 'no'
+  root.SNMP.Trap.Enabled: 'no'
+  root.SNMP.Trap.T0.Address: ''
+  root.SNMP.Trap.T0.AuthFail.Enabled: 'no'
+  root.SNMP.Trap.T0.ColdStart.Enabled: 'no'
+  root.SNMP.Trap.T0.Community: public
+  root.SNMP.Trap.T0.LinkUp.Enabled: 'no'
+  root.SNMP.Trap.T0.WarmStart.Enabled: 'no'
+  root.SNMP.V1: 'no'
+  root.SNMP.V1ReadCommunity: public
+  root.SNMP.V1WriteCommunity: write
+  root.SNMP.V2c: 'no'
+  root.SNMP.V3: 'no'
+  root.SOCKS.Enabled: 'no'
+  root.SOCKS.LocalNetworks: 10.0.0.0/255.0.0.0, 172.16.0.0/255.240.0.0, 192.168.0.0/255.255.255.0
+  root.SOCKS.Password: ''
+  root.SOCKS.Server: socks
+  root.SOCKS.ServerPort: '1080'
+  root.SOCKS.ServerType: '4'
+  root.SOCKS.UserName: ''
+  root.Storage.MountDir: /var/spool/storage
+  root.Storage.S0.CleanupLevel: '90'
+  root.Storage.S0.CleanupMaxAge: '7'
+  root.Storage.S0.CleanupPolicyActive: fifo
+  root.Storage.S0.DeviceNode: /dev/mmcblk0p1
+  root.Storage.S0.DiskID: SD_DISK
+  root.Storage.S0.FileSystem: vfat
+  root.Storage.S0.FriendlyName: ''
+  root.Storage.S0.Locked: 'no'
+  root.Storage.S0.MountOnBoot: 'yes'
+  root.Storage.S1.CleanupLevel: '90'
+  root.Storage.S1.CleanupMaxAge: '33'
+  root.Storage.S1.CleanupPolicyActive: fifo
+  root.Storage.S1.DiskID: NetworkShare
+  root.Storage.S1.FileSystem: cifs
+  root.Storage.S1.FriendlyName: ''
+  root.Storage.S1.Locked: 'no'
+  root.Storage.S1.MountOnBoot: 'yes'
+  root.StreamCache.MaxGroups: '20'
+  root.StreamCache.S0.Enabled: 'no'
+  root.StreamCache.S0.Options: ''
+  root.StreamCache.S0.RequestedLengthTime: '30'
+  root.StreamCache.Size: '16252928'
+  root.StreamProfile.MaxGroups: '20'
+  root.StreamProfile.S0.Default.Description: Best image quality and full frame rate.
+  root.StreamProfile.S0.Default.Name: Quality
+  root.StreamProfile.S0.Default.Parameters: videocodec=h264&resolution=1920x1080&compression=20&fps=0&videokeyframeinterval=8&videobitrate=0
+  root.StreamProfile.S0.Description: Best image quality and full frame rate.
+  root.StreamProfile.S0.Name: Quality
+  root.StreamProfile.S0.Parameters: videocodec=h264&resolution=1920x1080&compression=20&fps=0&videokeyframeinterval=8&videobitrate=0
+  root.StreamProfile.S1.Default.Description: Medium image quality and frame rate.
+  root.StreamProfile.S1.Default.Name: Balanced
+  root.StreamProfile.S1.Default.Parameters: videocodec=h264&resolution=640x480&compression=30&fps=15&videokeyframeinterval=15&videobitrate=0
+  root.StreamProfile.S1.Description: Medium image quality and frame rate.
+  root.StreamProfile.S1.Name: Balanced
+  root.StreamProfile.S1.Parameters: videocodec=h264&resolution=640x480&compression=30&fps=15&videokeyframeinterval=15&videobitrate=0
+  root.StreamProfile.S2.Default.Description: Low bandwidth with medium image quality.
+  root.StreamProfile.S2.Default.Name: Bandwidth
+  root.StreamProfile.S2.Default.Parameters: videocodec=h264&resolution=640x480&compression=50&fps=15&videokeyframeinterval=32&videobitrate=250&videomaxbitrate=1000&videobitratepriority=framerate
+  root.StreamProfile.S2.Description: Low bandwidth with medium image quality.
+  root.StreamProfile.S2.Name: Bandwidth
+  root.StreamProfile.S2.Parameters: videocodec=h264&resolution=640x480&compression=50&fps=15&videokeyframeinterval=32&videobitrate=250&videomaxbitrate=1000&videobitratepriority=framerate
+  root.StreamProfile.S3.Default.Description: Mobile device settings.
+  root.StreamProfile.S3.Default.Name: Mobile
+  root.StreamProfile.S3.Default.Parameters: videocodec=h264&resolution=352x240&compression=50&fps=15&videokeyframeinterval=32&videobitrate=120&videomaxbitrate=128&videobitratepriority=quality&audio=0
+  root.StreamProfile.S3.Description: Mobile device settings.
+  root.StreamProfile.S3.Name: Mobile
+  root.StreamProfile.S3.Parameters: videocodec=h264&resolution=352x240&compression=50&fps=15&videokeyframeinterval=32&videobitrate=120&videomaxbitrate=128&videobitratepriority=quality&audio=0
+  root.System.AlternateBoaPort: '0'
+  root.System.BoaDSCP: '0'
+  root.System.BoaEnableXFrameOptions: '1'
+  root.System.BoaGroupPolicy.admin: http
+  root.System.BoaGroupPolicy.operator: http
+  root.System.BoaGroupPolicy.viewer: http
+  root.System.BoaKeepAliveTimeout: '180'
+  root.System.BoaPort: '80'
+  root.System.BoaProtViewer: password
+  root.System.BoaXFrameOptions: sameorigin
+  root.System.CaptureFrequencySet: 'yes'
+  root.System.RootPwdSet: 'yes'
+  root.Tampering.T0.DarkDetectionEnabled: 'yes'
+  root.Tampering.T0.DarkThreshold: '90'
+  root.Tampering.T0.MinDuration: '20'
+  root.TemperatureControl.Sensor.S0.Name: SENSOR
+  root.TemperatureControl.Sensor.S0.TriggerHigh: '70'
+  root.TemperatureControl.Sensor.S0.TriggerLow: '-30'
+  root.Time.DST.Enabled: 'no'
+  root.Time.NTP.Server: 192.168.1.100
+  root.Time.NTP.VolatileServer: '192.168.1.100 '
+  root.Time.ObtainFromDHCP: 'yes'
+  root.Time.POSIXTimeZone: MSK-3
+  root.Time.ServerDate: ''
+  root.Time.ServerTime: ''
+  root.Time.SyncSource: NTP
+  root.WebService.UsernameToken.ReplayAttackProtection: 'yes'
