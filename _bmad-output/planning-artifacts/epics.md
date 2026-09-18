@@ -48,6 +48,22 @@ FR32: The system can report each camera's configured SMB/network share settings 
 FR33: The system can report each camera's current timezone and recording retention (cleanup max age) setting.
 FR34: The operator can request `cctv status` output as JSON via a `--json` flag for machine-readable consumption.
 FR35: The system can link the motion-detection action rule to the actual motion source in use on a camera — the installed AXIS Video Motion Detection app's own event topic on legacy cameras where that app had to be installed, rather than assuming the fixed built-in window-based motion topic applies to every camera.
+FR36: The operator can define multiple named profiles in the config file, each matching one or more camera models.
+FR37: The system can match a discovered camera to the first profile whose configured models list matches the camera's reported model string.
+FR38: The system can report a camera as failed, distinctly from a VAPIX error, when it matches no configured profile.
+FR39: The operator can pin a `target_firmware` version per profile; the system checks it before applying any other setting and fails that camera (applying nothing) on a mismatch.
+FR40: The system never upgrades or otherwise modifies camera firmware — `target_firmware` is a read-only precondition.
+FR41: The operator can select a storage backend per profile (`smb` or `sd_s3sync`), each with its own destination settings.
+FR42: The system can install and configure the `sd_to_s3_sync` ACAP from a local package path, writing configuration before first start and restarting the app when its configuration changed, since it reads configuration only at process startup.
+FR43: The system can configure the built-in VMD4 motion-detection engine (filter-based) as an alternative to the legacy sensitivity-based motion group, selected by matched profile.
+FR44: The operator can define fleet-wide settings (NTP fallback servers, timezone, recording retention) once, applied identically to every camera regardless of profile.
+FR45: The system can configure recording retention against the correct underlying storage group (SD card vs. network share) per the matched profile's backend.
+FR46: The system can ensure a motion→record action rule exists on each camera, binding the profile's motion event source to a recording action targeting that profile's storage.
+FR47: The system can bind the `sd_s3sync` recording rule to the camera's actual VMD4 profile identifier rather than the "any profile" wildcard, which the rule-creation API rejects.
+FR48: The system can converge an existing but incorrect action rule by removing and recreating it, since the API offers no in-place edit; a disabled rule does not count as satisfying the requirement.
+FR49: The system can expand the built-in VMD4 detection profile's trigger area to cover the full frame, preserving filters, identifiers, and other trigger types.
+FR50: The system can synchronise a camera's DHCP-assigned hostname onto its static hostname, because the hostname determines each camera's namespace within shared storage.
+FR51: The system deliberately does not manage the sync ACAP's S3 key prefix — the ACAP derives it from the camera's own hostname at runtime.
 
 ### NonFunctional Requirements
 
@@ -73,7 +89,7 @@ NFR13: VAPIX API errors (non-2xx responses) are captured and surfaced as actiona
 - **Exception hierarchy:** `VapixError` defined in `vapix.py`; `ConfigError` defined in `config.py`. Executor catches all exceptions per camera.
 - **Read-before-write enforcement:** `reconciler.py` must always GET current state before any SET; never call `set_params` without comparing current state first.
 - **Timeout discipline:** Always pass `timeout` from `CameraConfig` — never hardcode a timeout value in any module.
-- **Pre-implementation verification task:** Exact VAPIX 3 parameter names for SMB (`root.Network.Share.*`) and motion detection (`root.Motion.*`) on firmware 5.51.7.4 must be verified against real hardware before coding `vapix.py`.
+- **Verified parameter names (resolved):** the SMB group is `root.NetworkShare.N0.*` and legacy motion is `root.Motion.M<n>.*`, both confirmed on firmware 5.51.7.4. Neither exists usably on 12.x — see the VAPIX API Protocol section of `architecture.md` for the full verified parameter table across both generations.
 - **Distribution:** `pip install git+https://github.com/atotmakov/cctv.git`; development mode via `pip install -e .`.
 - **Implementation sequence:** pyproject.toml scaffold → config.py → vapix.py → scanner.py → reconciler.py → executor.py → reporter.py → cli.py.
 - **Test fixtures:** `conftest.py` must provide a sample `CameraConfig`, mock `HTTPDigestAuth`, and mock `requests.get/post` responses for VAPIX 3 responses.
@@ -120,6 +136,22 @@ FR32: Epic 4 — report SMB/network share settings, excluding passwords (Story 4
 FR33: Epic 4 — report timezone + recording retention (Story 4.1)
 FR34: Epic 4 — `--json` output flag for `cctv status` (Story 4.2)
 FR35: Epic 3 — link motion action rule to the installed VMD app's own event topic on legacy cameras (Story 3.7)
+FR36: Epic 5 — multiple named profiles matched by camera model (Story 5.1)
+FR37: Epic 5 — first-match-wins profile selection by model substring (Story 5.1)
+FR38: Epic 5 — camera matching no profile is reported failed, not skipped (Story 5.1)
+FR39: Epic 5 — `target_firmware` precondition checked before any write (Story 5.2)
+FR40: Epic 5 — firmware never upgraded by the tool (Story 5.2)
+FR41: Epic 5 — storage backend selected per profile (Stories 5.1, 5.3)
+FR42: Epic 5 — sync ACAP install, configure-before-start, restart-on-change (Story 5.3)
+FR43: Epic 5 — VMD4 filter-based motion configuration (Story 5.4)
+FR44: Epic 5 — fleet-wide NTP, timezone, retention (Story 5.6)
+FR45: Epic 5 — retention routed to the backend's storage group (Story 5.6)
+FR46: Epic 5 — motion→record action rule for both backends (Story 5.5)
+FR47: Epic 5 — concrete VMD4 profile topic, not the wildcard (Story 5.5)
+FR48: Epic 5 — remove-and-recreate convergence of incorrect rules (Story 5.5)
+FR49: Epic 5 — VMD4 trigger area expanded to full frame (Story 5.4)
+FR50: Epic 5 — DHCP hostname synced to static hostname (Story 5.6)
+FR51: Epic 5 — S3 key prefix deliberately unmanaged (Story 5.3)
 
 ## Epic List
 
@@ -146,6 +178,12 @@ The user can run a strictly read-only command that reports each discovered camer
 
 **FRs covered:** FR29, FR30, FR31, FR32, FR33, FR34
 **NFRs addressed:** NFR3, NFR7, NFR8
+
+### Epic 5: Camera Profiles and the SD+S3 Backend (added 2026-09-02)
+The user can manage a fleet spanning two camera generations from one config file. Each camera is matched by model to a named profile that declares its own firmware precondition, motion-detection method, storage backend, and required applications — while NTP, timezone, and retention stay declared once, fleet-wide. This exists because the AXIS M3085-V generation supports neither SMB shares nor the legacy motion parameter group, and needs SD-card recording plus a sync ACAP instead.
+
+**FRs covered:** FR36, FR37, FR38, FR39, FR40, FR41, FR42, FR43, FR44, FR45, FR46, FR47, FR48, FR49, FR50, FR51
+**NFRs addressed:** NFR3, NFR7, NFR9, NFR11
 
 ## Epic 1: Installable Tool with Config Validation
 
@@ -494,3 +532,196 @@ So that I can pipe fleet status into scripts or other tooling instead of parsing
 **Given** `--json` is not passed
 **When** `cctv status` runs
 **Then** output is the human-readable text format from Story 4.1 (JSON is opt-in, not the default)
+
+## Epic 5: Camera Profiles and the SD+S3 Backend
+
+The user can manage a fleet spanning two camera generations from one config
+file. Each camera is matched by model to a named profile declaring its own
+firmware precondition, motion-detection method, storage backend, and required
+applications; NTP, timezone, and retention stay declared once, fleet-wide.
+
+**Why this epic exists:** the AXIS M3085-V generation (AXIS OS 12.x) supports
+neither SMB network shares (`root.NetworkShare` errors outright) nor the legacy
+motion parameter group (`root.Motion` is unused by VMD4). The single implicit
+profile assumed by Epics 1–3 could not be stretched to cover it. See the VAPIX
+API Protocol section of `architecture.md` for the per-generation API details
+these stories depend on.
+
+**FRs covered:** FR36–FR51
+**NFRs addressed:** NFR3, NFR7, NFR9, NFR11
+
+### Story 5.1: Profile-Based Config Schema and Model Matching
+
+As a home sysadmin,
+I want to declare multiple named profiles in `cameras.yaml`, each matching a set of camera models,
+So that one config file can describe a fleet whose cameras need genuinely different settings.
+
+**Acceptance Criteria:**
+
+**Given** a config file with a `profiles` list, each entry having `name`, `match.models`, `motion_detection`, and `storage`
+**When** the config is loaded
+**Then** each profile is parsed into its own structure, and validation errors name the offending profile by index and full key path (e.g. `profiles[1].storage.sd_s3sync.secret_key`)
+
+**Given** a discovered camera reporting a full product name such as `AXIS M3085-V Network Camera`
+**When** it is matched against a profile whose `match.models` contains `M3085-V`
+**Then** the profile matches on substring, not exact equality
+
+**Given** a camera matching more than one profile's model list
+**When** matching runs
+**Then** the first profile declared in the file wins — declaration order is the tiebreak, not specificity
+
+**Given** a camera matching no profile at all
+**When** `cctv apply` reaches it
+**Then** that camera is reported as failed with a message naming its model and pointing at `match.models`, and no setting is read or written on it — an unmanaged camera is visible in the output, never silently skipped
+
+**Given** fleet-wide keys (`ntp_fallback_servers`, `timezone`, `recording_retention_days`)
+**When** they are present at the top level
+**Then** they apply to every camera regardless of matched profile, and each is independently optional
+
+### Story 5.2: Firmware Precondition Check
+
+As a home sysadmin,
+I want a profile to pin the firmware version its settings were verified against,
+So that cctv refuses to configure a camera whose API surface may not match what the profile assumes.
+
+**Acceptance Criteria:**
+
+**Given** a profile declaring `target_firmware`
+**When** a matched camera reports a different firmware version
+**Then** that camera fails with a message stating both versions and that cctv does not auto-upgrade, **before any other setting is read or written** — the camera is never left partially converged
+
+**Given** a profile with no `target_firmware`
+**When** reconciliation runs
+**Then** the firmware version parameter is never read at all
+
+**Given** any camera in any state
+**When** cctv runs
+**Then** no firmware upgrade call is ever issued — `target_firmware` is a read-only precondition (see the rejected-alternatives section of `architecture.md` for the real-hardware upgrade failure that settled this)
+
+### Story 5.3: SD-Card + S3 Sync Storage Backend
+
+As a home sysadmin,
+I want cameras that cannot use SMB to record to their SD card and have clips synced to an S3 bucket,
+So that the newer camera generation gets off-camera storage without a network share it cannot mount.
+
+**Acceptance Criteria:**
+
+**Given** a profile with `storage.backend: sd_s3sync`
+**When** reconciliation runs against a matched camera
+**Then** the SMB parameter group and the legacy motion group are never read or written on that camera
+
+**Given** the sync ACAP is not installed and the profile declares `applications.sd_to_s3_sync.app_package_path`
+**When** reconciliation runs
+**Then** the package is uploaded, the application list is re-read to learn the registered package name, and a failure to appear afterwards is reported as a clear error
+
+**Given** the ACAP is absent and no `app_package_path` is configured
+**When** reconciliation runs
+**Then** the camera fails with a message naming the missing config key — no silent skip
+
+**Given** the ACAP's stored S3 configuration differs from the profile
+**When** reconciliation runs
+**Then** only the differing parameters are written, not the whole group
+
+**Given** the ACAP is running and its configuration was just changed
+**When** reconciliation completes that step
+**Then** the app is stopped and started again, because it reads configuration only at process startup and would otherwise keep running with the old values
+
+**Given** the ACAP is running and its configuration did not change
+**When** reconciliation runs
+**Then** it is left alone — no restart that would interrupt an in-flight upload
+
+**Given** the ACAP is installed but stopped, with configuration already correct
+**When** reconciliation runs
+**Then** it is simply started
+
+**Given** any reconciliation of this backend
+**When** ACAP parameters are written
+**Then** the S3 key prefix is never among them — the app derives it from the camera's own hostname, giving each camera its own bucket namespace with no per-camera config
+
+### Story 5.4: VMD4 Motion Configuration
+
+As a home sysadmin,
+I want motion detection configured correctly on the VMD4 camera generation,
+So that motion anywhere in frame raises an event with the same tuning as the reference camera.
+
+**Acceptance Criteria:**
+
+**Given** a matched camera whose profile uses VMD4 motion
+**When** the bundled motion application is `Stopped`
+**Then** it is started — and never installed from a package, since it ships with the firmware on this generation
+
+**Given** the motion application is entirely absent on such a camera
+**When** reconciliation runs
+**Then** the camera fails with a message saying the app was expected to be bundled — cctv does not attempt to install it
+
+**Given** the detection profile's trigger area does not cover the full frame
+**When** reconciliation runs
+**Then** the trigger area is expanded to full frame, and the profile's filters, identifier, name, and any other trigger types are preserved unchanged
+
+**Given** the profile declares filter values (minimum object size, short-lived-object limit, swaying-object distance)
+**When** the camera's corresponding filters differ
+**Then** those filters are updated in place; filter types not already present on the camera are not invented
+
+**Given** the profile sets `motion_detection.enabled: false`
+**When** reconciliation runs
+**Then** no motion API is called at all, but the storage backend is still converged
+
+### Story 5.5: Motion→Record Action Rule for Both Backends
+
+As a home sysadmin,
+I want the motion event bound to a recording action on every camera,
+So that configured cameras actually record, rather than being fully configured but inert.
+
+**Acceptance Criteria:**
+
+**Given** a camera with no motion recording rule
+**When** reconciliation runs
+**Then** an action configuration and an action rule are created in that order, the rule referencing the returned configuration id, with the profile's pre/post durations converted to milliseconds
+
+**Given** the `sd_s3sync` backend
+**When** the rule is created
+**Then** it targets storage `SD_DISK` and is bound to the camera's actual VMD4 profile identifier — never the "any profile" wildcard, which the rule-creation API rejects even though it appears when reading existing rules back
+
+**Given** the `smb` backend
+**When** the rule is created
+**Then** it targets storage `NetworkShare`, bound to the legacy application's own event topic when that application is the motion source, otherwise to the built-in motion topic narrowed to the full-frame window
+
+**Given** an existing enabled rule whose topic, storage target, or durations do not match the desired state
+**When** reconciliation runs
+**Then** both the rule and its action configuration are removed and recreated, because the API offers no in-place edit of an action configuration
+
+**Given** an existing rule that is already fully correct
+**When** reconciliation runs
+**Then** nothing is created or removed
+
+**Given** a rule that matches in every respect but is disabled
+**When** reconciliation runs
+**Then** it does not count as satisfying the requirement and a correct rule is created
+
+### Story 5.6: Fleet-Wide Time and Retention Settings
+
+As a home sysadmin,
+I want NTP, timezone, and retention declared once and applied everywhere,
+So that settings which should never differ between cameras cannot drift apart per profile.
+
+**Acceptance Criteria:**
+
+**Given** `ntp_fallback_servers` is configured
+**When** the camera's configured list differs
+**Then** the full intended list is written in one replace operation — never appended to, since a partial write drops the servers omitted from it
+
+**Given** `ntp_fallback_servers` is absent or empty
+**When** reconciliation runs
+**Then** the NTP endpoint is never read
+
+**Given** `recording_retention_days` is configured
+**When** reconciliation runs
+**Then** it is written to the storage group matching the camera's backend — the SD card group on `sd_s3sync`, the network-share group on `smb` — from that single fleet-wide value
+
+**Given** a camera whose DHCP-assigned hostname differs from its configured static hostname
+**When** reconciliation runs
+**Then** the static hostname is synced to it, because that hostname determines the camera's own namespace in shared storage
+
+**Given** a camera with no DHCP-assigned hostname
+**When** reconciliation runs
+**Then** the hostname is left unchanged and the static hostname is not even read

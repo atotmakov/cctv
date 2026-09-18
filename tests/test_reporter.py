@@ -162,7 +162,7 @@ def test_print_camera_status_full_block(capsys, camera_config) -> None:
 def test_print_camera_status_credentials_never_printed(capsys, camera_config) -> None:
     print_camera_status([_full_status()])
     out = capsys.readouterr().out
-    assert camera_config.smb_password not in out
+    assert camera_config.profiles[0].storage.smb.password not in out
     assert camera_config.password not in out
 
 

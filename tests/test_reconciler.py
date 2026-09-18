@@ -11,16 +11,25 @@ from cctv.reconciler import (
     _SMB_SHARE,
     _SMB_USER,
     _SMB_PASS,
-    _MOTION_SENSITIVITY,
-    _STORAGE_RETENTION,
+    _STORAGE_RETENTION_S0,
+    _STORAGE_RETENTION_S1,
+    _FIRMWARE_VERSION,
     _TIME_TIMEZONE,
     _NETWORK_HOSTNAME,
     _NETWORK_VOLATILE_HOSTNAME,
+    find_network_share_index,
+    smb_param_keys,
 )
 from cctv.scanner import DiscoveredCamera
 from cctv.vapix import VapixError
 
 CAM = DiscoveredCamera(ip="192.168.1.101", model="AXIS P3245-V")
+SD_CAM = DiscoveredCamera(ip="192.168.0.24", model="AXIS M3085-V")
+
+# Sensitivity key of the full-frame window in the motion_params_response fixture.
+# The reconciler derives this per-camera via full_frame_sensitivity_key() rather
+# than hardcoding a window index, so it is a test-side constant, not a source one.
+_MOTION_SENSITIVITY = "root.Motion.M0.Sensitivity"
 
 
 @pytest.fixture(autouse=True)
@@ -118,7 +127,7 @@ def test_reconcile_smb_ip_mismatch_sets_only_smb_ip(
     assert "hostname" not in result.settings_changed
     mock_set.assert_called_once_with(
         CAM.ip,
-        {_SMB_HOST: camera_config.smb_ip},
+        {_SMB_HOST: camera_config.profiles[0].storage.smb.ip},
         mock_auth,
         camera_config.timeout,
     )
@@ -210,9 +219,9 @@ def test_reconcile_smb_share_mismatch_sets_smb_creds(
     mock_set.assert_called_once_with(
         CAM.ip,
         {
-            _SMB_SHARE: camera_config.smb_share,
-            _SMB_USER: camera_config.smb_username,
-            _SMB_PASS: camera_config.smb_password,
+            _SMB_SHARE: camera_config.profiles[0].storage.smb.share,
+            _SMB_USER: camera_config.profiles[0].storage.smb.username,
+            _SMB_PASS: camera_config.profiles[0].storage.smb.password,
         },
         mock_auth,
         camera_config.timeout,
@@ -260,14 +269,14 @@ def test_reconcile_smb_both_ip_and_creds_change(
     assert "smb_creds" in result.settings_changed
     assert mock_set.call_count == 2
     mock_set.assert_any_call(
-        CAM.ip, {_SMB_HOST: camera_config.smb_ip}, mock_auth, camera_config.timeout
+        CAM.ip, {_SMB_HOST: camera_config.profiles[0].storage.smb.ip}, mock_auth, camera_config.timeout
     )
     mock_set.assert_any_call(
         CAM.ip,
         {
-            _SMB_SHARE: camera_config.smb_share,
-            _SMB_USER: camera_config.smb_username,
-            _SMB_PASS: camera_config.smb_password,
+            _SMB_SHARE: camera_config.profiles[0].storage.smb.share,
+            _SMB_USER: camera_config.profiles[0].storage.smb.username,
+            _SMB_PASS: camera_config.profiles[0].storage.smb.password,
         },
         mock_auth,
         camera_config.timeout,
@@ -305,7 +314,7 @@ def test_reconcile_smb_password_not_in_vapix_error(
         mock_get.side_effect = [smb_params_response, motion_params_response]
         with pytest.raises(VapixError) as exc_info:
             reconcile(CAM, camera_config, mock_auth)
-    assert camera_config.smb_password not in str(exc_info.value)
+    assert camera_config.profiles[0].storage.smb.password not in str(exc_info.value)
 
 
 def test_reconcile_motion_sensitivity_differs_sets_only_sensitivity(
@@ -332,11 +341,11 @@ def test_reconcile_motion_sensitivity_differs_sets_only_sensitivity(
 
 
 def test_reconcile_motion_enabled_config_not_written(
-    camera_config, mock_auth, smb_params_response, motion_params_response,
+    camera_config, legacy_profile, mock_auth, smb_params_response, motion_params_response,
     storage_params_response, volatile_hostname_response,
 ) -> None:
     """D3: config.motion_enabled is never written via param.cgi regardless of camera state."""
-    camera_config.motion_enabled = False
+    legacy_profile.motion_detection["enabled"] = False
     with patch("cctv.reconciler.vapix.get_params") as mock_get, \
          patch("cctv.reconciler.vapix.set_params") as mock_set:
         mock_get.side_effect = [smb_params_response, motion_params_response, storage_params_response, volatile_hostname_response]
@@ -363,11 +372,11 @@ def test_reconcile_motion_already_matches_no_motion_set(
 
 
 def test_reconcile_motion_sensitivity_float_treated_as_int(
-    camera_config, mock_auth, smb_params_response, motion_params_response,
+    camera_config, legacy_profile, mock_auth, smb_params_response, motion_params_response,
     storage_params_response, volatile_hostname_response,
 ) -> None:
     """Float motion_sensitivity (e.g. 90.0) must compare as '90', not '90.0'."""
-    camera_config.motion_sensitivity = 90.0
+    legacy_profile.motion_detection["sensitivity"] = 90.0
     with patch("cctv.reconciler.vapix.get_params") as mock_get, \
          patch("cctv.reconciler.vapix.set_params") as mock_set:
         mock_get.side_effect = [smb_params_response, motion_params_response, storage_params_response, volatile_hostname_response]
@@ -379,7 +388,7 @@ def test_reconcile_motion_sensitivity_float_treated_as_int(
 
 
 def test_reconcile_installs_vmd_app_when_absent(
-    camera_config, mock_auth, smb_params_response, motion_params_response,
+    camera_config, legacy_profile, mock_auth, smb_params_response, motion_params_response,
     storage_params_response, volatile_hostname_response,
 ) -> None:
     """vmd app not in the installed-apps list → uploaded, re-listed, then started under its real package Name.
@@ -390,7 +399,7 @@ def test_reconcile_installs_vmd_app_when_absent(
     hardcoded constant.
     """
     from cctv.vapix import InstalledApplication
-    camera_config.motion_app_package_path = "/opt/eap/AXIS_Video_Motion_Detection_2_2_1.eap"
+    legacy_profile.applications["video_motion_detection"] = {"app_package_path": "/opt/eap/AXIS_Video_Motion_Detection_2_2_1.eap"}
     installed_after_upload = InstalledApplication(
         name="VideoMotionDetection", nice_name="AXIS Video Motion Detection", status="Stopped",
     )
@@ -410,10 +419,10 @@ def test_reconcile_installs_vmd_app_when_absent(
 
 
 def test_reconcile_vmd_app_missing_after_upload_raises(
-    camera_config, mock_auth, smb_params_response,
+    camera_config, legacy_profile, mock_auth, smb_params_response,
 ) -> None:
     """Uploaded package but app still doesn't show up in the list afterwards → clear VapixError, no start attempted."""
-    camera_config.motion_app_package_path = "/opt/eap/broken.eap"
+    legacy_profile.applications["video_motion_detection"] = {"app_package_path": "/opt/eap/broken.eap"}
 
     with patch("cctv.reconciler.vapix.get_params", return_value=smb_params_response), \
          patch("cctv.reconciler.vapix.get_applications", return_value=[]), \
@@ -427,10 +436,10 @@ def test_reconcile_vmd_app_missing_after_upload_raises(
 
 
 def test_reconcile_missing_vmd_app_without_package_path_raises(
-    camera_config, mock_auth, smb_params_response,
+    camera_config, legacy_profile, mock_auth, smb_params_response,
 ) -> None:
     """vmd app absent and no app_package_path configured → clear VapixError, no upload/start attempted."""
-    camera_config.motion_app_package_path = None
+    legacy_profile.applications.pop("video_motion_detection", None)
 
     with patch("cctv.reconciler.vapix.get_params", return_value=smb_params_response), \
          patch("cctv.reconciler.vapix.get_applications", return_value=[]), \
@@ -489,11 +498,11 @@ def test_reconcile_vmd_app_idle_status_no_change(
 
 
 def test_reconcile_vmd_app_check_skipped_when_motion_disabled(
-    camera_config, mock_auth, smb_params_response, motion_params_response,
+    camera_config, legacy_profile, mock_auth, smb_params_response, motion_params_response,
     storage_params_response, volatile_hostname_response,
 ) -> None:
     """motion_enabled=False → app install/start check is not even attempted."""
-    camera_config.motion_enabled = False
+    legacy_profile.motion_detection["enabled"] = False
 
     with patch("cctv.reconciler.vapix.get_params") as mock_get, \
          patch("cctv.reconciler.vapix.set_params"), \
@@ -579,11 +588,11 @@ def test_reconcile_vmd_app_area_skipped_for_builtin_app(
 
 
 def test_reconcile_vmd_app_area_skipped_when_motion_disabled(
-    camera_config, mock_auth, smb_params_response, motion_params_response,
+    camera_config, legacy_profile, mock_auth, smb_params_response, motion_params_response,
     storage_params_response, volatile_hostname_response,
 ) -> None:
     """motion_enabled=False → neither area API is even attempted."""
-    camera_config.motion_enabled = False
+    legacy_profile.motion_detection["enabled"] = False
 
     with patch("cctv.reconciler.vapix.get_params") as mock_get, \
          patch("cctv.reconciler.vapix.set_params"), \
@@ -772,7 +781,7 @@ def test_reconcile_retention_mismatch_sets_retention(
     storage_params_response, volatile_hostname_response,
 ) -> None:
     """retention_days differs → 'retention' in settings_changed, SET with new value."""
-    storage_params_response = {**storage_params_response, _STORAGE_RETENTION: "7"}  # camera has 7, config=33
+    storage_params_response = {**storage_params_response, _STORAGE_RETENTION_S1: "7"}  # camera has 7, config=33
 
     with patch("cctv.reconciler.vapix.get_params") as mock_get, \
          patch("cctv.reconciler.vapix.set_params") as mock_set:
@@ -786,7 +795,7 @@ def test_reconcile_retention_mismatch_sets_retention(
     assert "hostname" not in result.settings_changed
     mock_set.assert_called_once_with(
         CAM.ip,
-        {_STORAGE_RETENTION: "33"},
+        {_STORAGE_RETENTION_S1: "33"},
         mock_auth,
         camera_config.timeout,
     )
@@ -811,7 +820,7 @@ def test_reconcile_retention_applied_label_in_output(
     storage_params_response, volatile_hostname_response,
 ) -> None:
     """When retention changes, settings_changed contains exactly 'retention' once."""
-    storage_params_response = {**storage_params_response, _STORAGE_RETENTION: "90"}
+    storage_params_response = {**storage_params_response, _STORAGE_RETENTION_S1: "90"}
 
     with patch("cctv.reconciler.vapix.get_params") as mock_get, \
          patch("cctv.reconciler.vapix.set_params"):
@@ -996,11 +1005,11 @@ def test_reconcile_no_change_when_motion_rule_exists(
 
 
 def test_reconcile_motion_rule_skipped_when_motion_disabled(
-    camera_config, mock_auth, smb_params_response, motion_params_response,
+    camera_config, legacy_profile, mock_auth, smb_params_response, motion_params_response,
     storage_params_response, volatile_hostname_response,
 ) -> None:
     """motion_enabled=False → no SOAP calls at all for action rules."""
-    camera_config.motion_enabled = False
+    legacy_profile.motion_detection["enabled"] = False
     with patch("cctv.reconciler.vapix.get_params") as mock_get, \
          patch("cctv.reconciler.vapix.set_params"), \
          patch("cctv.reconciler.vapix.get_action_configurations") as mock_get_cfgs, \
@@ -1040,7 +1049,7 @@ def test_reconcile_disabled_rule_not_counted_as_existing(
 
 
 def test_reconcile_motion_timing_updated_when_differs(
-    camera_config, mock_auth, smb_params_response, motion_params_response,
+    camera_config, legacy_profile, mock_auth, smb_params_response, motion_params_response,
     storage_params_response, volatile_hostname_response,
 ) -> None:
     """Existing rule has wrong durations → old rule/config removed, new one created."""
@@ -1053,8 +1062,8 @@ def test_reconcile_motion_timing_updated_when_differs(
     )
     old_rule = ActionRule(rule_id=3, name="cctv_motion_record", enabled=True,
                           topic="tns1:VideoAnalytics/tnsaxis:MotionDetection", primary_action=3)
-    camera_config.motion_pre_trigger_time = 10
-    camera_config.motion_post_trigger_time = 10
+    legacy_profile.motion_detection["pre_trigger_time"] = 10
+    legacy_profile.motion_detection["post_trigger_time"] = 10
 
     with patch("cctv.reconciler.vapix.get_params") as mock_get, \
          patch("cctv.reconciler.vapix.set_params"), \
@@ -1153,14 +1162,14 @@ def test_reconcile_builtin_vmd_app_uses_builtin_topic(
 
 
 def test_reconcile_newly_installed_legacy_app_uses_app_event_topic(
-    camera_config, mock_auth, smb_params_response, motion_params_response,
+    camera_config, legacy_profile, mock_auth, smb_params_response, motion_params_response,
     storage_params_response, volatile_hostname_response,
 ) -> None:
     """FR35: app installed THIS run (Story 3.6 path) → rule still uses the app's topic,
     not just when the app was already installed beforehand."""
     from cctv.vapix import InstalledApplication
     from cctv.reconciler import _LEGACY_VMD_APP_MOTION_TOPIC
-    camera_config.motion_app_package_path = "/opt/eap/AXIS_Video_Motion_Detection_2_2_1.eap"
+    legacy_profile.applications["video_motion_detection"] = {"app_package_path": "/opt/eap/AXIS_Video_Motion_Detection_2_2_1.eap"}
     installed_after_upload = InstalledApplication(
         name="VideoMotionDetection", nice_name="AXIS Video Motion Detection", status="Stopped",
     )
@@ -1246,3 +1255,581 @@ def test_reconcile_non_networkshare_action_not_counted(
 
     assert "motion_rule" in result.settings_changed
     mock_add_rule.assert_called_once()
+
+
+# ---------------------------------------------------------------------------
+# Profile matching and the firmware precondition
+# ---------------------------------------------------------------------------
+
+
+def test_reconcile_unmatched_model_raises_before_any_read(camera_config, mock_auth) -> None:
+    """A camera whose model matches no profile is a failure for that run, not a
+    silent skip — and it fails before any camera state is read or written."""
+    unknown = DiscoveredCamera(ip="192.168.1.199", model="AXIS Q6135-LE PTZ")
+
+    with patch("cctv.reconciler.vapix.get_params") as mock_get, \
+         patch("cctv.reconciler.vapix.set_params") as mock_set:
+        with pytest.raises(VapixError, match="No profile in cameras.yaml matches"):
+            reconcile(unknown, camera_config, mock_auth)
+
+    mock_get.assert_not_called()
+    mock_set.assert_not_called()
+
+
+def test_reconcile_firmware_mismatch_raises_before_any_write(
+    camera_config, legacy_profile, mock_auth
+) -> None:
+    """target_firmware is a precondition: a mismatch fails the camera before any
+    setting is touched, so it is never left partially converged. cctv never upgrades."""
+    legacy_profile.target_firmware = "5.51.7.4"
+
+    with patch("cctv.reconciler.vapix.get_params", return_value={_FIRMWARE_VERSION: "5.40.9.2"}), \
+         patch("cctv.reconciler.vapix.set_params") as mock_set:
+        with pytest.raises(VapixError, match="Firmware mismatch") as exc_info:
+            reconcile(CAM, camera_config, mock_auth)
+
+    assert "does not" in str(exc_info.value)  # states cctv won't auto-upgrade
+    mock_set.assert_not_called()
+
+
+def test_reconcile_firmware_match_proceeds(
+    camera_config, legacy_profile, mock_auth, smb_params_response, motion_params_response,
+    storage_params_response, volatile_hostname_response,
+) -> None:
+    """Firmware matches the profile's precondition → reconciliation continues normally."""
+    legacy_profile.target_firmware = "5.51.7.4"
+
+    with patch("cctv.reconciler.vapix.get_params") as mock_get, \
+         patch("cctv.reconciler.vapix.set_params") as mock_set:
+        mock_get.side_effect = [
+            {_FIRMWARE_VERSION: "5.51.7.4"},
+            smb_params_response, motion_params_response,
+            storage_params_response, volatile_hostname_response,
+        ]
+        result = reconcile(CAM, camera_config, mock_auth)
+
+    assert result.status == CameraStatus.NO_CHANGE
+    mock_set.assert_not_called()
+
+
+def test_reconcile_firmware_not_read_when_precondition_absent(
+    camera_config, mock_auth, smb_params_response, motion_params_response,
+    storage_params_response, volatile_hostname_response,
+) -> None:
+    """No target_firmware in the profile → the version param is never read at all."""
+    with patch("cctv.reconciler.vapix.get_params") as mock_get, \
+         patch("cctv.reconciler.vapix.set_params"):
+        mock_get.side_effect = [smb_params_response, motion_params_response, storage_params_response, volatile_hostname_response]
+        reconcile(CAM, camera_config, mock_auth)
+
+    for c in mock_get.call_args_list:
+        assert c.args[1] != _FIRMWARE_VERSION
+
+
+# ---------------------------------------------------------------------------
+# Fleet-wide NTP fallback servers
+# ---------------------------------------------------------------------------
+
+
+def test_reconcile_ntp_fallback_set_when_differs(
+    camera_config, mock_auth, smb_params_response, motion_params_response,
+    storage_params_response, volatile_hostname_response,
+) -> None:
+    """Configured fallback servers differ from the camera's → full-replace write."""
+    camera_config.ntp_fallback_servers = ["pool.ntp.org", "ntp1.vniiftri.ru"]
+
+    with patch("cctv.reconciler.vapix.get_params") as mock_get, \
+         patch("cctv.reconciler.vapix.set_params"), \
+         patch("cctv.reconciler.vapix.get_ntp_fallback_servers", return_value=["pool.ntp.org"]), \
+         patch("cctv.reconciler.vapix.set_ntp_fallback_servers") as mock_set_ntp:
+        mock_get.side_effect = [smb_params_response, motion_params_response, storage_params_response, volatile_hostname_response]
+        result = reconcile(CAM, camera_config, mock_auth)
+
+    assert "ntp_fallback" in result.settings_changed
+    mock_set_ntp.assert_called_once_with(
+        CAM.ip, mock_auth, camera_config.timeout, ["pool.ntp.org", "ntp1.vniiftri.ru"],
+    )
+
+
+def test_reconcile_ntp_fallback_no_change_when_matches(
+    camera_config, mock_auth, smb_params_response, motion_params_response,
+    storage_params_response, volatile_hostname_response,
+) -> None:
+    """Camera already lists exactly the configured servers → no write."""
+    camera_config.ntp_fallback_servers = ["pool.ntp.org", "ntp1.vniiftri.ru"]
+
+    with patch("cctv.reconciler.vapix.get_params") as mock_get, \
+         patch("cctv.reconciler.vapix.set_params"), \
+         patch("cctv.reconciler.vapix.get_ntp_fallback_servers", return_value=["pool.ntp.org", "ntp1.vniiftri.ru"]), \
+         patch("cctv.reconciler.vapix.set_ntp_fallback_servers") as mock_set_ntp:
+        mock_get.side_effect = [smb_params_response, motion_params_response, storage_params_response, volatile_hostname_response]
+        result = reconcile(CAM, camera_config, mock_auth)
+
+    assert "ntp_fallback" not in result.settings_changed
+    mock_set_ntp.assert_not_called()
+
+
+def test_reconcile_ntp_fallback_skipped_when_not_configured(
+    camera_config, mock_auth, smb_params_response, motion_params_response,
+    storage_params_response, volatile_hostname_response,
+) -> None:
+    """Empty ntp_fallback_servers → the NTP endpoint is never even read."""
+    with patch("cctv.reconciler.vapix.get_params") as mock_get, \
+         patch("cctv.reconciler.vapix.set_params"), \
+         patch("cctv.reconciler.vapix.get_ntp_fallback_servers") as mock_get_ntp:
+        mock_get.side_effect = [smb_params_response, motion_params_response, storage_params_response, volatile_hostname_response]
+        reconcile(CAM, camera_config, mock_auth)
+
+    mock_get_ntp.assert_not_called()
+
+
+# ---------------------------------------------------------------------------
+# sd_s3sync backend (AXIS OS 12.x — SD card recording synced to S3 by an ACAP)
+# ---------------------------------------------------------------------------
+
+
+@pytest.fixture
+def sd_backend_mocks(vmd_app_running, sds3sync_app_running, sd_action_config, sd_action_rule):
+    """Healthy steady state for an M3085-V: VMD4 running and full-frame, the
+    sd_to_s3_sync ACAP installed/configured/running, SD-record rule in place.
+    Tests override individual patches to exercise the divergent paths."""
+    from cctv.vapix import Vmd4Profile
+    full_frame_data = {
+        "configurationStatus": 0,
+        "profiles": [{
+            "camera": 1, "uid": 1, "name": "Profile 1",
+            "filters": [
+                {"active": True, "type": "sizePercentage", "data": [5, 5]},
+                {"active": True, "type": "timeShortLivedLimit", "data": 1},
+                {"active": True, "type": "distanceSwayingObject", "data": 5},
+            ],
+            "triggers": [{"type": "includeArea", "data": [[-1.0, -1.0], [-1.0, 1.0], [1.0, 1.0], [1.0, -1.0]]}],
+        }],
+        "cameras": [{"id": 1, "rotation": 0, "active": True}],
+    }
+    with patch("cctv.reconciler.vapix.get_applications", return_value=[vmd_app_running, sds3sync_app_running]), \
+         patch("cctv.reconciler.vapix.get_vmd4_configuration", return_value=full_frame_data), \
+         patch("cctv.reconciler.vapix.set_vmd4_configuration"), \
+         patch("cctv.reconciler.vapix.get_vmd4_profiles", return_value=[Vmd4Profile(uid=1, name="Profile 1", camera=1)]), \
+         patch("cctv.reconciler.vapix.get_action_configurations", return_value=[sd_action_config]), \
+         patch("cctv.reconciler.vapix.get_action_rules", return_value=[sd_action_rule]), \
+         patch("cctv.reconciler.vapix.add_action_configuration"), \
+         patch("cctv.reconciler.vapix.add_action_rule"), \
+         patch("cctv.reconciler.vapix.remove_action_rule"), \
+         patch("cctv.reconciler.vapix.remove_action_configuration"), \
+         patch("cctv.reconciler.vapix.upload_application"), \
+         patch("cctv.reconciler.vapix.start_application"), \
+         patch("cctv.reconciler.vapix.stop_application"):
+        yield
+
+
+def test_reconcile_sd_backend_all_match_returns_no_change(
+    camera_config, mock_auth, sd_backend_mocks, sds3sync_params_response,
+    sd_storage_params_response, volatile_hostname_response,
+) -> None:
+    """M3085-V already fully converged → NO_CHANGE, no writes of any kind."""
+    with patch("cctv.reconciler.vapix.get_params") as mock_get, \
+         patch("cctv.reconciler.vapix.set_params") as mock_set:
+        mock_get.side_effect = [sds3sync_params_response, sd_storage_params_response, volatile_hostname_response]
+        result = reconcile(SD_CAM, camera_config, mock_auth)
+
+    assert result.status == CameraStatus.NO_CHANGE
+    assert result.settings_changed == []
+    mock_set.assert_not_called()
+
+
+def test_reconcile_sd_backend_selected_by_model(
+    camera_config, mock_auth, sd_backend_mocks, sds3sync_params_response,
+    sd_storage_params_response, volatile_hostname_response,
+) -> None:
+    """An M3085-V routes to the sd_s3sync profile, so the SMB param group —
+    which errors outright on this firmware — is never touched."""
+    from cctv.reconciler import _SMB_GROUP, _MOTION_GROUP
+    with patch("cctv.reconciler.vapix.get_params") as mock_get, \
+         patch("cctv.reconciler.vapix.set_params"):
+        mock_get.side_effect = [sds3sync_params_response, sd_storage_params_response, volatile_hostname_response]
+        reconcile(SD_CAM, camera_config, mock_auth)
+
+    read_groups = [c.args[1] for c in mock_get.call_args_list]
+    assert _SMB_GROUP not in read_groups
+    assert _MOTION_GROUP not in read_groups
+
+
+def test_reconcile_sd_backend_uses_s0_retention_group(
+    camera_config, mock_auth, sd_backend_mocks, sds3sync_params_response,
+    volatile_hostname_response,
+) -> None:
+    """Retention applies to S0 (SD card) on this backend, not S1 (NetworkShare)."""
+    stale_retention = {_STORAGE_RETENTION_S0: "7"}
+
+    with patch("cctv.reconciler.vapix.get_params") as mock_get, \
+         patch("cctv.reconciler.vapix.set_params") as mock_set:
+        mock_get.side_effect = [sds3sync_params_response, stale_retention, volatile_hostname_response]
+        result = reconcile(SD_CAM, camera_config, mock_auth)
+
+    assert "retention" in result.settings_changed
+    mock_set.assert_called_once_with(
+        SD_CAM.ip, {_STORAGE_RETENTION_S0: "33"}, mock_auth, camera_config.timeout,
+    )
+
+
+def test_reconcile_sd_backend_starts_stopped_vmd(
+    camera_config, mock_auth, sd_backend_mocks, sds3sync_params_response,
+    sd_storage_params_response, volatile_hostname_response, sds3sync_app_running,
+) -> None:
+    """VMD4 ships Stopped on factory-default units → started, never installed
+    (it is bundled with the firmware on this model)."""
+    from cctv.vapix import InstalledApplication
+    stopped_vmd = InstalledApplication(name="vmd", nice_name="AXIS Video Motion Detection", status="Stopped", version="4.5.70")
+
+    with patch("cctv.reconciler.vapix.get_params") as mock_get, \
+         patch("cctv.reconciler.vapix.set_params"), \
+         patch("cctv.reconciler.vapix.get_applications", return_value=[stopped_vmd, sds3sync_app_running]), \
+         patch("cctv.reconciler.vapix.upload_application") as mock_upload, \
+         patch("cctv.reconciler.vapix.start_application") as mock_start:
+        mock_get.side_effect = [sds3sync_params_response, sd_storage_params_response, volatile_hostname_response]
+        result = reconcile(SD_CAM, camera_config, mock_auth)
+
+    assert "motion_app_started" in result.settings_changed
+    mock_upload.assert_not_called()
+    mock_start.assert_called_once_with(SD_CAM.ip, mock_auth, camera_config.timeout, "vmd")
+
+
+def test_reconcile_sd_backend_missing_vmd_raises(
+    camera_config, mock_auth, sd_backend_mocks, sds3sync_app_running,
+) -> None:
+    """VMD4 absent on a model that should bundle it → clear failure, not a silent install."""
+    with patch("cctv.reconciler.vapix.get_params"), \
+         patch("cctv.reconciler.vapix.get_applications", return_value=[sds3sync_app_running]), \
+         patch("cctv.reconciler.vapix.upload_application") as mock_upload:
+        with pytest.raises(VapixError, match="expected bundled/pre-installed"):
+            reconcile(SD_CAM, camera_config, mock_auth)
+
+    mock_upload.assert_not_called()
+
+
+def test_reconcile_sd_backend_updates_vmd4_filters(
+    camera_config, s3_profile, mock_auth, sd_backend_mocks, sds3sync_params_response,
+    sd_storage_params_response, volatile_hostname_response,
+) -> None:
+    """Filter values differing from the profile are converged in place; filter
+    types the camera does not already have are not invented."""
+    s3_profile.motion_detection["size_percentage"] = [10, 10]
+    drifted = {
+        "configurationStatus": 0,
+        "profiles": [{
+            "camera": 1, "uid": 1, "name": "Profile 1",
+            "filters": [
+                {"active": True, "type": "sizePercentage", "data": [5, 5]},
+                {"active": True, "type": "timeShortLivedLimit", "data": 1},
+            ],
+            "triggers": [{"type": "includeArea", "data": [[-1.0, -1.0], [-1.0, 1.0], [1.0, 1.0], [1.0, -1.0]]}],
+        }],
+        "cameras": [{"id": 1, "rotation": 0, "active": True}],
+    }
+
+    with patch("cctv.reconciler.vapix.get_params") as mock_get, \
+         patch("cctv.reconciler.vapix.set_params"), \
+         patch("cctv.reconciler.vapix.get_vmd4_configuration", return_value=drifted), \
+         patch("cctv.reconciler.vapix.set_vmd4_configuration") as mock_set_vmd4:
+        mock_get.side_effect = [sds3sync_params_response, sd_storage_params_response, volatile_hostname_response]
+        result = reconcile(SD_CAM, camera_config, mock_auth)
+
+    assert "motion_filters" in result.settings_changed
+    posted = mock_set_vmd4.call_args[0][3]
+    filters = posted["profiles"][0]["filters"]
+    assert {"active": True, "type": "sizePercentage", "data": [10, 10]} in filters
+    assert [f["type"] for f in filters] == ["sizePercentage", "timeShortLivedLimit"]
+
+
+def test_reconcile_sd_backend_installs_missing_acap(
+    camera_config, mock_auth, sd_backend_mocks, vmd_app_running, sds3sync_app_running,
+    sds3sync_params_response, sd_storage_params_response, volatile_hostname_response,
+) -> None:
+    """sd_to_s3_sync absent → uploaded from the configured .eap, then re-listed."""
+    with patch("cctv.reconciler.vapix.get_params") as mock_get, \
+         patch("cctv.reconciler.vapix.set_params"), \
+         patch("cctv.reconciler.vapix.get_applications",
+               side_effect=[[vmd_app_running], [vmd_app_running], [vmd_app_running, sds3sync_app_running],
+                            [vmd_app_running, sds3sync_app_running]]), \
+         patch("cctv.reconciler.vapix.upload_application") as mock_upload, \
+         patch("cctv.reconciler.vapix.start_application"):
+        mock_get.side_effect = [sds3sync_params_response, sd_storage_params_response, volatile_hostname_response]
+        result = reconcile(SD_CAM, camera_config, mock_auth)
+
+    assert "sd_to_s3_sync_installed" in result.settings_changed
+    mock_upload.assert_called_once_with(
+        SD_CAM.ip, mock_auth, camera_config.timeout,
+        "/opt/eap/signed_SD_to_S3_Sync_0_9_5_aarch64.eap",
+    )
+
+
+def test_reconcile_sd_backend_missing_acap_without_package_path_raises(
+    camera_config, s3_profile, mock_auth, sd_backend_mocks, vmd_app_running,
+) -> None:
+    """ACAP absent and no app_package_path to install it from → clear failure."""
+    s3_profile.applications["sd_to_s3_sync"] = {}
+
+    with patch("cctv.reconciler.vapix.get_params"), \
+         patch("cctv.reconciler.vapix.get_applications", return_value=[vmd_app_running]), \
+         patch("cctv.reconciler.vapix.upload_application") as mock_upload:
+        with pytest.raises(VapixError, match="app_package_path"):
+            reconcile(SD_CAM, camera_config, mock_auth)
+
+    mock_upload.assert_not_called()
+
+
+def test_reconcile_sd_backend_writes_only_drifted_acap_params(
+    camera_config, mock_auth, sd_backend_mocks, sds3sync_params_response,
+    sd_storage_params_response, volatile_hostname_response,
+) -> None:
+    """Only the differing root.Sds3sync params are written, not the whole group."""
+    drifted = {**sds3sync_params_response, "root.Sds3sync.S3Bucket": "stale-bucket"}
+
+    with patch("cctv.reconciler.vapix.get_params") as mock_get, \
+         patch("cctv.reconciler.vapix.set_params") as mock_set:
+        mock_get.side_effect = [drifted, sd_storage_params_response, volatile_hostname_response]
+        result = reconcile(SD_CAM, camera_config, mock_auth)
+
+    assert "sd_to_s3_sync_config" in result.settings_changed
+    mock_set.assert_called_once_with(
+        SD_CAM.ip, {"root.Sds3sync.S3Bucket": "my-cctv-bucket"}, mock_auth, camera_config.timeout,
+    )
+
+
+def test_reconcile_sd_backend_never_writes_acap_prefix(
+    camera_config, mock_auth, sd_backend_mocks, sd_storage_params_response,
+    volatile_hostname_response,
+) -> None:
+    """Prefix is left to the ACAP to derive from the camera's own hostname, so
+    every camera gets its own bucket namespace with no per-camera config."""
+    with patch("cctv.reconciler.vapix.get_params") as mock_get, \
+         patch("cctv.reconciler.vapix.set_params") as mock_set:
+        mock_get.side_effect = [{}, sd_storage_params_response, volatile_hostname_response]
+        reconcile(SD_CAM, camera_config, mock_auth)
+
+    written = mock_set.call_args_list[0].args[1]
+    assert "root.Sds3sync.Prefix" not in written
+
+
+def test_reconcile_sd_backend_restarts_acap_after_config_change(
+    camera_config, mock_auth, sd_backend_mocks, sd_storage_params_response,
+    volatile_hostname_response,
+) -> None:
+    """Real-hardware finding: the ACAP reads its config only at startup, so a
+    running app whose config just changed must be stopped and started again."""
+    with patch("cctv.reconciler.vapix.get_params") as mock_get, \
+         patch("cctv.reconciler.vapix.set_params"), \
+         patch("cctv.reconciler.vapix.stop_application") as mock_stop, \
+         patch("cctv.reconciler.vapix.start_application") as mock_start:
+        mock_get.side_effect = [{}, sd_storage_params_response, volatile_hostname_response]
+        result = reconcile(SD_CAM, camera_config, mock_auth)
+
+    assert "sd_to_s3_sync_restarted" in result.settings_changed
+    mock_stop.assert_called_once_with(SD_CAM.ip, mock_auth, camera_config.timeout, "sds3sync")
+    mock_start.assert_called_once_with(SD_CAM.ip, mock_auth, camera_config.timeout, "sds3sync")
+
+
+def test_reconcile_sd_backend_no_restart_when_config_unchanged(
+    camera_config, mock_auth, sd_backend_mocks, sds3sync_params_response,
+    sd_storage_params_response, volatile_hostname_response,
+) -> None:
+    """A running, already-correctly-configured ACAP is left alone — no needless
+    restart that would interrupt an in-flight upload on every reconcile."""
+    with patch("cctv.reconciler.vapix.get_params") as mock_get, \
+         patch("cctv.reconciler.vapix.set_params"), \
+         patch("cctv.reconciler.vapix.stop_application") as mock_stop, \
+         patch("cctv.reconciler.vapix.start_application") as mock_start:
+        mock_get.side_effect = [sds3sync_params_response, sd_storage_params_response, volatile_hostname_response]
+        result = reconcile(SD_CAM, camera_config, mock_auth)
+
+    assert "sd_to_s3_sync_restarted" not in result.settings_changed
+    mock_stop.assert_not_called()
+    mock_start.assert_not_called()
+
+
+def test_reconcile_sd_backend_starts_stopped_acap_without_stopping_first(
+    camera_config, mock_auth, sd_backend_mocks, vmd_app_running,
+    sds3sync_params_response, sd_storage_params_response, volatile_hostname_response,
+) -> None:
+    """A stopped, already-configured ACAP is simply started."""
+    from cctv.vapix import InstalledApplication
+    stopped_acap = InstalledApplication(name="sds3sync", nice_name="SD to S3 Sync", status="Stopped", version="0.9.5")
+
+    with patch("cctv.reconciler.vapix.get_params") as mock_get, \
+         patch("cctv.reconciler.vapix.set_params"), \
+         patch("cctv.reconciler.vapix.get_applications", return_value=[vmd_app_running, stopped_acap]), \
+         patch("cctv.reconciler.vapix.stop_application") as mock_stop, \
+         patch("cctv.reconciler.vapix.start_application") as mock_start:
+        mock_get.side_effect = [sds3sync_params_response, sd_storage_params_response, volatile_hostname_response]
+        result = reconcile(SD_CAM, camera_config, mock_auth)
+
+    assert "sd_to_s3_sync_started" in result.settings_changed
+    mock_stop.assert_not_called()
+    mock_start.assert_called_once_with(SD_CAM.ip, mock_auth, camera_config.timeout, "sds3sync")
+
+
+def test_reconcile_sd_backend_creates_sd_record_rule(
+    camera_config, mock_auth, sd_backend_mocks, sds3sync_params_response,
+    sd_storage_params_response, volatile_hostname_response,
+) -> None:
+    """No rule present → created against the VMD4 profile topic, recording to
+    SD_DISK with the profile's own pre/post durations."""
+    with patch("cctv.reconciler.vapix.get_params") as mock_get, \
+         patch("cctv.reconciler.vapix.set_params"), \
+         patch("cctv.reconciler.vapix.get_action_configurations", return_value=[]), \
+         patch("cctv.reconciler.vapix.get_action_rules", return_value=[]), \
+         patch("cctv.reconciler.vapix.add_action_configuration", return_value=21) as mock_add_cfg, \
+         patch("cctv.reconciler.vapix.add_action_rule") as mock_add_rule:
+        mock_get.side_effect = [sds3sync_params_response, sd_storage_params_response, volatile_hostname_response]
+        result = reconcile(SD_CAM, camera_config, mock_auth)
+
+    assert "motion_rule" in result.settings_changed
+    cfg_kwargs = mock_add_cfg.call_args.kwargs
+    assert cfg_kwargs["name"] == "cctv_motion_sd_record"
+    assert cfg_kwargs["parameters"]["storage_id"] == "SD_DISK"
+    assert cfg_kwargs["parameters"]["pre_duration"] == "5000"
+    assert cfg_kwargs["parameters"]["post_duration"] == "2000"
+
+    rule_kwargs = mock_add_rule.call_args.kwargs
+    assert rule_kwargs["topic"] == "tnsaxis:CameraApplicationPlatform/VMD/Camera1Profile1"
+    assert rule_kwargs["primary_action"] == 21
+
+
+def test_reconcile_sd_backend_rule_uses_concrete_profile_uid(
+    camera_config, mock_auth, sd_backend_mocks, sds3sync_params_response,
+    sd_storage_params_response, volatile_hostname_response,
+) -> None:
+    """The rule targets the camera's actual VMD4 profile uid, not a wildcard —
+    AddActionRule rejects the ProfileANY wildcard on creation."""
+    from cctv.vapix import Vmd4Profile
+
+    with patch("cctv.reconciler.vapix.get_params") as mock_get, \
+         patch("cctv.reconciler.vapix.set_params"), \
+         patch("cctv.reconciler.vapix.get_vmd4_profiles", return_value=[Vmd4Profile(uid=3, name="Profile 3", camera=1)]), \
+         patch("cctv.reconciler.vapix.get_action_configurations", return_value=[]), \
+         patch("cctv.reconciler.vapix.get_action_rules", return_value=[]), \
+         patch("cctv.reconciler.vapix.add_action_configuration", return_value=22), \
+         patch("cctv.reconciler.vapix.add_action_rule") as mock_add_rule:
+        mock_get.side_effect = [sds3sync_params_response, sd_storage_params_response, volatile_hostname_response]
+        reconcile(SD_CAM, camera_config, mock_auth)
+
+    topic = mock_add_rule.call_args.kwargs["topic"]
+    assert topic == "tnsaxis:CameraApplicationPlatform/VMD/Camera1Profile3"
+    assert "ANY" not in topic
+
+
+def test_reconcile_sd_backend_motion_disabled_skips_motion_but_keeps_sync(
+    camera_config, s3_profile, mock_auth, sd_backend_mocks, sds3sync_params_response,
+    sd_storage_params_response, volatile_hostname_response,
+) -> None:
+    """motion_detection.enabled=false → no VMD4 or action-rule work, but the
+    storage backend itself is still converged."""
+    s3_profile.motion_detection["enabled"] = False
+
+    with patch("cctv.reconciler.vapix.get_params") as mock_get, \
+         patch("cctv.reconciler.vapix.set_params"), \
+         patch("cctv.reconciler.vapix.get_vmd4_configuration") as mock_get_vmd4, \
+         patch("cctv.reconciler.vapix.get_action_rules") as mock_get_rules:
+        mock_get.side_effect = [sds3sync_params_response, sd_storage_params_response, volatile_hostname_response]
+        result = reconcile(SD_CAM, camera_config, mock_auth)
+
+    assert result.status == CameraStatus.NO_CHANGE
+    mock_get_vmd4.assert_not_called()
+    mock_get_rules.assert_not_called()
+
+
+def test_reconcile_sd_backend_s3_secret_not_in_vapix_error(
+    camera_config, mock_auth, sd_backend_mocks, sd_storage_params_response,
+    volatile_hostname_response,
+) -> None:
+    """NFR7: the S3 secret key must not leak into any VapixError message."""
+    with patch("cctv.reconciler.vapix.get_params") as mock_get, \
+         patch("cctv.reconciler.vapix.set_params", side_effect=VapixError("SET params on 192.168.0.24 failed: 401 Unauthorized")):
+        mock_get.side_effect = [{}, sd_storage_params_response, volatile_hostname_response]
+        with pytest.raises(VapixError) as exc_info:
+            reconcile(SD_CAM, camera_config, mock_auth)
+
+    assert camera_config.profiles[1].storage.sd_s3sync.secret_key not in str(exc_info.value)
+
+
+# ---------------------------------------------------------------------------
+# Network share index resolution — the Nx slot is internal parhand bookkeeping
+# and is not always N0 (real hardware: 192.168.1.60 serves its only share from
+# N1 while 192.168.1.79 serves the identical share from N0).
+# ---------------------------------------------------------------------------
+
+def test_find_network_share_index_defaults_to_n0_when_unconfigured() -> None:
+    """No share configured at all → N0, the slot a camera gives its first share."""
+    assert find_network_share_index({}) == "N0"
+
+
+def test_find_network_share_index_finds_sole_share_at_n1() -> None:
+    """Share living at N1 is found — reading a hardcoded N0 here yields nothing."""
+    smb = {
+        "root.NetworkShare.N1.Address": "192.168.1.100",
+        "root.NetworkShare.N1.Share": "cctv",
+        "root.NetworkShare.N1.Username": "cctv",
+    }
+    assert find_network_share_index(smb) == "N1"
+
+
+def test_find_network_share_index_prefers_slot_matching_desired() -> None:
+    """With two shares configured, the one matching desired host/share wins over the lowest."""
+    smb = {
+        "root.NetworkShare.N0.Address": "192.168.1.200",
+        "root.NetworkShare.N0.Share": "other",
+        "root.NetworkShare.N2.Address": "192.168.1.100",
+        "root.NetworkShare.N2.Share": "cctv",
+    }
+    assert find_network_share_index(smb, "192.168.1.100", "cctv") == "N2"
+
+
+def test_find_network_share_index_falls_back_to_lowest_when_no_match() -> None:
+    """Nothing matches desired → lowest configured slot, ordered numerically not lexically."""
+    smb = {
+        "root.NetworkShare.N10.Address": "192.168.1.200",
+        "root.NetworkShare.N2.Address": "192.168.1.201",
+    }
+    assert find_network_share_index(smb, "10.0.0.1", "nope") == "N2"
+
+
+def test_smb_param_keys_builds_keys_for_given_index() -> None:
+    assert smb_param_keys("N1") == (
+        "root.NetworkShare.N1.Address",
+        "root.NetworkShare.N1.Share",
+        "root.NetworkShare.N1.Username",
+        "root.NetworkShare.N1.Password",
+    )
+
+
+def test_reconcile_smb_writes_to_n1_not_n0(
+    camera_config, mock_auth, motion_params_response,
+    storage_params_response, volatile_hostname_response,
+) -> None:
+    """Camera whose share sits at N1 with a stale host → correction written to N1.
+
+    Regression: previously the reconciler read and wrote a hardcoded N0, so on such
+    a camera it saw no share at all and would have written a duplicate at N0.
+    """
+    smb_at_n1 = {
+        "root.NetworkShare.N1.Address": "10.0.0.99",   # stale — differs from config
+        "root.NetworkShare.N1.Share": "/mnt/cctv",
+        "root.NetworkShare.N1.Username": "smbuser",
+        "root.NetworkShare.N1.Password": "smbpass",
+    }
+
+    with patch("cctv.reconciler.vapix.get_params") as mock_get, \
+         patch("cctv.reconciler.vapix.set_params") as mock_set:
+        mock_get.side_effect = [smb_at_n1, motion_params_response, storage_params_response, volatile_hostname_response]
+        result = reconcile(CAM, camera_config, mock_auth)
+
+    assert result.status == CameraStatus.APPLIED
+    assert "smb_ip" in result.settings_changed
+    assert "smb_creds" not in result.settings_changed  # creds already correct at N1
+    mock_set.assert_called_once_with(
+        CAM.ip,
+        {"root.NetworkShare.N1.Address": camera_config.profiles[0].storage.smb.ip},
+        mock_auth,
+        camera_config.timeout,
+    )

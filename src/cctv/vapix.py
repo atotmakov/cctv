@@ -104,6 +104,65 @@ def add_motion_window(ip: str, auth: HTTPDigestAuth, timeout: int, sensitivity: 
     return int(m.group(1))
 
 
+# ---------------------------------------------------------------------------
+# network share API
+# ---------------------------------------------------------------------------
+
+
+@dataclass
+class ConfiguredNetworkShare:
+    share_id: str
+    nice_name: str
+    address: str
+    share: str
+    user: str
+    disk_id: str
+
+
+def get_network_shares(ip: str, auth: HTTPDigestAuth, timeout: int) -> list[ConfiguredNetworkShare]:
+    """GET the camera's configured SMB/CIFS network shares.
+
+    Read-only. Prefer this over reading root.NetworkShare.Nx.* directly: the Nx
+    index is internal parhand bookkeeping and is NOT always N0. A camera that has
+    had a share added and removed over its life keeps the original slot — real
+    hardware finding (2026-09-17, AXIS M3005 192.168.1.60): its only share sits at
+    N1 after a leftover recipient share was removed from N0, while 192.168.1.79
+    has the identical share at N0. This endpoint reports both identically and
+    never exposes the index at all.
+    """
+    url = f"http://{ip}/axis-cgi/disks/networkshare/list.cgi"
+    try:
+        resp = requests.get(
+            url,
+            params={"schemaversion": "1"},
+            auth=auth,
+            timeout=timeout,
+        )
+    except requests.exceptions.Timeout:
+        raise VapixError(f"Connection timeout to {ip}")
+    except requests.exceptions.ConnectionError as e:
+        raise VapixError(f"Connection error to {ip}: {e}")
+    except requests.exceptions.RequestException as e:
+        raise VapixError(f"Request error to {ip}: {e}")
+    if resp.status_code != 200:
+        raise VapixError(f"GET network shares from {ip} failed: {resp.status_code} {resp.reason}")
+
+    shares: list[ConfiguredNetworkShare] = []
+    for tag in re.findall(r"<NetworkShare\b[^>]*/?>", resp.text):
+        attrs = dict(re.findall(r'(\w+)="([^"]*)"', tag))
+        if "ShareId" not in attrs:
+            continue  # <NetworkShares NumberOfShares=".."> wrapper, not a share
+        shares.append(ConfiguredNetworkShare(
+            share_id=attrs.get("ShareId", ""),
+            nice_name=attrs.get("NiceName", ""),
+            address=attrs.get("Address", ""),
+            share=attrs.get("Share", ""),
+            user=attrs.get("User", ""),
+            disk_id=attrs.get("DiskId", ""),
+        ))
+    return shares
+
+
 @dataclass
 class InstalledApplication:
     name: str
@@ -192,6 +251,93 @@ def start_application(ip: str, auth: HTTPDigestAuth, timeout: int, package: str)
         raise VapixError(f"START application {package} on {ip} failed: {resp.status_code} {resp.reason}")
     if "error" in resp.text.lower():
         raise VapixError(f"START application {package} on {ip} rejected: {resp.text.strip()[:200]}")
+
+
+def stop_application(ip: str, auth: HTTPDigestAuth, timeout: int, package: str) -> None:
+    """Stop a running application by package name. Raises VapixError on failure."""
+    url = f"http://{ip}/axis-cgi/applications/control.cgi"
+    try:
+        resp = requests.get(
+            url,
+            params={"action": "stop", "package": package},
+            auth=auth,
+            timeout=timeout,
+        )
+    except requests.exceptions.Timeout:
+        raise VapixError(f"Connection timeout to {ip}")
+    except requests.exceptions.ConnectionError as e:
+        raise VapixError(f"Connection error to {ip}: {e}")
+    except requests.exceptions.RequestException as e:
+        raise VapixError(f"Request error to {ip}: {e}")
+    if resp.status_code != 200:
+        raise VapixError(f"STOP application {package} on {ip} failed: {resp.status_code} {resp.reason}")
+    if "error" in resp.text.lower():
+        raise VapixError(f"STOP application {package} on {ip} rejected: {resp.text.strip()[:200]}")
+
+
+# ---------------------------------------------------------------------------
+# Modern REST config API — /config/rest/... (distinct from the legacy
+# param.cgi tree and from the older ntp.cgi-style JSON-RPC APIs). Found by
+# reading the web UI's own network traffic while editing the "Fallback NTP
+# servers" field (System > Time and location) — apidiscovery.cgi lists an
+# "ntp" API but it's a red herring for this; its JSON-RPC method names
+# (getConfiguration, getNtpServers, etc.) all return "Method does not exist"
+# against this endpoint family. VERIFIED against a real AXIS M3085-V
+# (192.168.0.4, firmware 12.11.72, 2026-08-29): GET/POST round-tripped
+# correctly, and a live edit-then-revert on real hardware confirmed both
+# directions work.
+# ---------------------------------------------------------------------------
+
+def get_ntp_fallback_servers(ip: str, auth: HTTPDigestAuth, timeout: int) -> list[str]:
+    """GET the camera's configured NTP fallback server list (used e.g. when
+    DHCP doesn't hand out an NTP source via option 42). Returns [] if none set."""
+    url = f"http://{ip}/config/rest/network-time-sync/v1/ntp/client"
+    try:
+        resp = requests.get(url, auth=auth, timeout=timeout)
+    except requests.exceptions.Timeout:
+        raise VapixError(f"Connection timeout to {ip}")
+    except requests.exceptions.ConnectionError as e:
+        raise VapixError(f"Connection error to {ip}: {e}")
+    except requests.exceptions.RequestException as e:
+        raise VapixError(f"Request error to {ip}: {e}")
+    if resp.status_code != 200:
+        raise VapixError(f"GET NTP fallback servers from {ip} failed: {resp.status_code} {resp.reason}")
+    try:
+        payload = resp.json()
+    except ValueError:
+        raise VapixError(f"GET NTP fallback servers from {ip}: response was not valid JSON")
+    if payload.get("status") != "success":
+        raise VapixError(f"GET NTP fallback servers from {ip} rejected: {payload}")
+    return list(payload.get("data", {}).get("staticServers", []))
+
+
+def set_ntp_fallback_servers(ip: str, auth: HTTPDigestAuth, timeout: int, servers: list[str]) -> None:
+    """SET the camera's NTP fallback server list. This is a FULL REPLACE, not
+    an append — pass every server that should be configured, not just new ones
+    (confirmed empirically: the write body mirrors the GET response's `data`
+    envelope exactly, or the camera rejects it with 'no data field')."""
+    url = f"http://{ip}/config/rest/network-time-sync/v1/ntp/client"
+    try:
+        resp = requests.post(
+            url,
+            json={"data": {"staticServers": servers}},
+            auth=auth,
+            timeout=timeout,
+        )
+    except requests.exceptions.Timeout:
+        raise VapixError(f"Connection timeout to {ip}")
+    except requests.exceptions.ConnectionError as e:
+        raise VapixError(f"Connection error to {ip}: {e}")
+    except requests.exceptions.RequestException as e:
+        raise VapixError(f"Request error to {ip}: {e}")
+    if resp.status_code != 200:
+        raise VapixError(f"SET NTP fallback servers on {ip} failed: {resp.status_code} {resp.reason}")
+    try:
+        payload = resp.json()
+    except ValueError:
+        raise VapixError(f"SET NTP fallback servers on {ip}: response was not valid JSON")
+    if payload.get("status") != "success":
+        raise VapixError(f"SET NTP fallback servers on {ip} rejected: {payload}")
 
 
 @dataclass

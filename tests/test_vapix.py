@@ -6,6 +6,8 @@ from requests.auth import HTTPDigestAuth
 
 from cctv.vapix import (
     VapixError,
+    get_network_shares,
+    ConfiguredNetworkShare,
     _parse_param_response,
     get_params,
     set_params,
@@ -19,7 +21,10 @@ from cctv.vapix import (
     get_applications,
     upload_application,
     start_application,
+    stop_application,
     InstalledApplication,
+    get_ntp_fallback_servers,
+    set_ntp_fallback_servers,
     get_vmd4_profiles,
     Vmd4Profile,
     get_vmd4_configuration,
@@ -751,3 +756,190 @@ def test_set_vmd_app_config_timeout_on_post() -> None:
          patch("cctv.vapix.requests.post", side_effect=req_lib.exceptions.Timeout):
         with pytest.raises(VapixError, match="timeout"):
             set_vmd_app_config(IP, AUTH, timeout=5, app_name="VideoMotionDetection", areas=[])
+
+
+# ---------------------------------------------------------------------------
+# stop_application
+# ---------------------------------------------------------------------------
+
+
+def test_stop_application_success() -> None:
+    mock_resp = MagicMock(status_code=200, text="OK")
+    with patch("cctv.vapix.requests.get", return_value=mock_resp) as mock_get:
+        stop_application(IP, AUTH, timeout=5, package="sds3sync")
+    mock_get.assert_called_once_with(
+        f"http://{IP}/axis-cgi/applications/control.cgi",
+        params={"action": "stop", "package": "sds3sync"},
+        auth=AUTH,
+        timeout=5,
+    )
+
+
+def test_stop_application_non_2xx_raises() -> None:
+    mock_resp = MagicMock(status_code=400, reason="Bad Request")
+    with patch("cctv.vapix.requests.get", return_value=mock_resp):
+        with pytest.raises(VapixError, match="400"):
+            stop_application(IP, AUTH, timeout=5, package="sds3sync")
+
+
+def test_stop_application_error_body_raises() -> None:
+    mock_resp = MagicMock(status_code=200, text="Error: no such package")
+    with patch("cctv.vapix.requests.get", return_value=mock_resp):
+        with pytest.raises(VapixError, match="rejected"):
+            stop_application(IP, AUTH, timeout=5, package="sds3sync")
+
+
+def test_stop_application_timeout_raises() -> None:
+    with patch("cctv.vapix.requests.get", side_effect=req_lib.exceptions.Timeout):
+        with pytest.raises(VapixError, match="timeout"):
+            stop_application(IP, AUTH, timeout=5, package="sds3sync")
+
+
+# ---------------------------------------------------------------------------
+# NTP fallback servers — modern /config/rest API
+# ---------------------------------------------------------------------------
+
+NTP_CLIENT_RESPONSE = {
+    "status": "success",
+    "data": {
+        "staticServers": ["pool.ntp.org", "ntp1.vniiftri.ru"],
+        "enabled": True,
+        "serversSource": "DHCP",
+        "synced": True,
+    },
+}
+
+
+def test_get_ntp_fallback_servers_parses_static_servers() -> None:
+    mock_resp = MagicMock(status_code=200)
+    mock_resp.json.return_value = NTP_CLIENT_RESPONSE
+    with patch("cctv.vapix.requests.get", return_value=mock_resp) as mock_get:
+        servers = get_ntp_fallback_servers(IP, AUTH, timeout=5)
+
+    assert servers == ["pool.ntp.org", "ntp1.vniiftri.ru"]
+    mock_get.assert_called_once_with(
+        f"http://{IP}/config/rest/network-time-sync/v1/ntp/client", auth=AUTH, timeout=5,
+    )
+
+
+def test_get_ntp_fallback_servers_empty_when_none_configured() -> None:
+    mock_resp = MagicMock(status_code=200)
+    mock_resp.json.return_value = {"status": "success", "data": {"enabled": True}}
+    with patch("cctv.vapix.requests.get", return_value=mock_resp):
+        assert get_ntp_fallback_servers(IP, AUTH, timeout=5) == []
+
+
+def test_get_ntp_fallback_servers_non_2xx_raises() -> None:
+    mock_resp = MagicMock(status_code=404, reason="Not Found")
+    with patch("cctv.vapix.requests.get", return_value=mock_resp):
+        with pytest.raises(VapixError, match="404"):
+            get_ntp_fallback_servers(IP, AUTH, timeout=5)
+
+
+def test_get_ntp_fallback_servers_non_json_raises() -> None:
+    mock_resp = MagicMock(status_code=200)
+    mock_resp.json.side_effect = ValueError
+    with patch("cctv.vapix.requests.get", return_value=mock_resp):
+        with pytest.raises(VapixError, match="not valid JSON"):
+            get_ntp_fallback_servers(IP, AUTH, timeout=5)
+
+
+def test_get_ntp_fallback_servers_error_status_raises() -> None:
+    mock_resp = MagicMock(status_code=200)
+    mock_resp.json.return_value = {"status": "error", "error": {"code": 12, "message": "nope"}}
+    with patch("cctv.vapix.requests.get", return_value=mock_resp):
+        with pytest.raises(VapixError, match="rejected"):
+            get_ntp_fallback_servers(IP, AUTH, timeout=5)
+
+
+def test_set_ntp_fallback_servers_posts_data_envelope() -> None:
+    """The write body must mirror the GET response's `data` envelope — posting
+    bare fields is rejected by the camera with "no 'data' field"."""
+    mock_resp = MagicMock(status_code=200)
+    mock_resp.json.return_value = {"status": "success"}
+    with patch("cctv.vapix.requests.post", return_value=mock_resp) as mock_post:
+        set_ntp_fallback_servers(IP, AUTH, 5, ["pool.ntp.org", "ntp1.vniiftri.ru"])
+
+    mock_post.assert_called_once_with(
+        f"http://{IP}/config/rest/network-time-sync/v1/ntp/client",
+        json={"data": {"staticServers": ["pool.ntp.org", "ntp1.vniiftri.ru"]}},
+        auth=AUTH,
+        timeout=5,
+    )
+
+
+def test_set_ntp_fallback_servers_non_2xx_raises() -> None:
+    mock_resp = MagicMock(status_code=500, reason="Internal Server Error")
+    with patch("cctv.vapix.requests.post", return_value=mock_resp):
+        with pytest.raises(VapixError, match="500"):
+            set_ntp_fallback_servers(IP, AUTH, 5, ["pool.ntp.org"])
+
+
+def test_set_ntp_fallback_servers_error_status_raises() -> None:
+    mock_resp = MagicMock(status_code=200)
+    mock_resp.json.return_value = {
+        "status": "error",
+        "error": {"code": 12, "message": "Invalid JSON body: There is no 'data' field"},
+    }
+    with patch("cctv.vapix.requests.post", return_value=mock_resp):
+        with pytest.raises(VapixError, match="rejected"):
+            set_ntp_fallback_servers(IP, AUTH, 5, ["pool.ntp.org"])
+
+
+def test_set_ntp_fallback_servers_connection_error_raises() -> None:
+    with patch("cctv.vapix.requests.post", side_effect=req_lib.exceptions.ConnectionError("refused")):
+        with pytest.raises(VapixError, match="Connection error"):
+            set_ntp_fallback_servers(IP, AUTH, 5, ["pool.ntp.org"])
+
+
+# ---------------------------------------------------------------------------
+# get_network_shares — the camera's own share API, which never exposes the
+# internal root.NetworkShare.Nx index.
+# ---------------------------------------------------------------------------
+
+_SHARE_LIST_XML = """<?xml version="1.0" encoding="utf-8"?>
+<NetworkShareResponse SchemaVersion="1.0">
+  <ListSuccess>
+    <NetworkShares NumberOfShares="1">
+      <NetworkShare NiceName="cctv" ShareId="10991" Address="192.168.1.100" Share="cctv" User="cctv" DiskId="NetworkShare"/>
+    </NetworkShares>
+  </ListSuccess>
+</NetworkShareResponse>"""
+
+
+def test_get_network_shares_parses_response() -> None:
+    """Share is reported identically regardless of which Nx slot backs it."""
+    mock_resp = MagicMock(status_code=200, text=_SHARE_LIST_XML)
+    with patch("cctv.vapix.requests.get", return_value=mock_resp) as mock_get:
+        shares = get_network_shares(IP, AUTH, timeout=5)
+    assert shares == [ConfiguredNetworkShare(
+        share_id="10991", nice_name="cctv", address="192.168.1.100",
+        share="cctv", user="cctv", disk_id="NetworkShare",
+    )]
+    mock_get.assert_called_once_with(
+        f"http://{IP}/axis-cgi/disks/networkshare/list.cgi",
+        params={"schemaversion": "1"},
+        auth=AUTH,
+        timeout=5,
+    )
+
+
+def test_get_network_shares_ignores_wrapper_element() -> None:
+    """<NetworkShares NumberOfShares=..> wrapper must not be parsed as a share."""
+    xml = '<NetworkShares NumberOfShares="0"></NetworkShares>'
+    mock_resp = MagicMock(status_code=200, text=xml)
+    with patch("cctv.vapix.requests.get", return_value=mock_resp):
+        assert get_network_shares(IP, AUTH, timeout=5) == []
+
+
+def test_get_network_shares_non_2xx_raises() -> None:
+    mock_resp = MagicMock(status_code=401, reason="Unauthorized", text="")
+    with patch("cctv.vapix.requests.get", return_value=mock_resp):
+        with pytest.raises(VapixError, match="failed"):
+            get_network_shares(IP, AUTH, timeout=5)
+
+
+def test_get_network_shares_timeout_raises() -> None:
+    with patch("cctv.vapix.requests.get", side_effect=req_lib.exceptions.Timeout):
+        with pytest.raises(VapixError, match="timeout"):
+            get_network_shares(IP, AUTH, timeout=5)

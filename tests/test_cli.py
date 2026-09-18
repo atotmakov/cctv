@@ -22,14 +22,20 @@ timeout: 5
 credentials:
   username: root
   password: pass
-smb:
-  ip: 192.168.1.10
-  share: /recordings
-  username: smbuser
-  password: smbpass
-motion_detection:
-  enabled: true
-  sensitivity: 50
+profiles:
+  - name: legacy-smb
+    match:
+      models: [P3245-V]
+    motion_detection:
+      enabled: true
+      sensitivity: 50
+    storage:
+      backend: smb
+      smb:
+        ip: 192.168.1.10
+        share: /recordings
+        username: smbuser
+        password: smbpass
 """
 
 
@@ -64,7 +70,7 @@ def test_apply_missing_config_file() -> None:
 
 def test_apply_invalid_config(tmp_path: Path) -> None:
     bad = tmp_path / "bad.yaml"
-    bad.write_text("subnet: 192.168.1.0/24\n")  # missing smb, credentials, motion_detection
+    bad.write_text("subnet: 192.168.1.0/24\n")  # missing credentials, profiles
     result = runner.invoke(app, ["apply", str(bad)])
     assert result.exit_code == 2
 
@@ -161,7 +167,7 @@ def test_status_missing_config_file() -> None:
 
 def test_status_invalid_config(tmp_path: Path) -> None:
     bad = tmp_path / "bad.yaml"
-    bad.write_text("subnet: 192.168.1.0/24\n")  # missing smb, credentials, motion_detection
+    bad.write_text("subnet: 192.168.1.0/24\n")  # missing credentials, profiles
     result = runner.invoke(app, ["status", str(bad)])
     assert result.exit_code == 2
 

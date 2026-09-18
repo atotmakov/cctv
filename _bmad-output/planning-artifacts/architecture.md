@@ -154,9 +154,18 @@ cctv = "cctv.cli:app"
 
 ### VAPIX API Protocol
 
-**Decision:** VAPIX 3 CGI — parameter API via `/axis-cgi/param.cgi`
+**Decision:** VAPIX CGI — parameter API via `/axis-cgi/param.cgi`, plus three
+further API families that `param.cgi` does not cover (see below).
 
-**Target firmware:** Axis 5.51.7.4
+**Target firmware:** two generations, one per profile — Axis 5.51.7.4 (legacy
+SMB fleet) and Axis 12.11.72 (M3085-V SD+S3 fleet).
+
+**Authentication:** HTTP Digest Auth on every request (handled by
+`requests.auth.HTTPDigestAuth`).
+
+**Camera identification during discovery:** HTTP probe to
+`/axis-cgi/param.cgi?action=list&group=root.Brand` — Axis cameras return brand
+information; non-Axis hosts return 401 or a connection error.
 
 **Protocol pattern:**
 ```
@@ -164,13 +173,197 @@ GET  /axis-cgi/param.cgi?action=list&group=<ParamGroup>
 POST /axis-cgi/param.cgi?action=update&<Param>=<Value>
 ```
 
-**Authentication:** HTTP Digest Auth on every request (handled by `requests.auth.HTTPDigestAuth`)
+#### Rule zero: discover, don't assume
 
-**Camera identification during discovery:** HTTP probe to `/axis-cgi/param.cgi?action=list&group=root.Brand` — Axis cameras return brand information; non-Axis hosts return 401 or connection error.
+API shape varies by model *and* firmware, and the two generations in this fleet
+differ materially. Verify against the specific unit before writing code for it:
 
-**⚠️ Implementation unknown:** Exact VAPIX 3 parameter names for SMB share configuration and motion detection on firmware 5.51.7.4 must be verified against the Axis VAPIX 3 parameter reference before coding `vapix.py`. Likely candidates:
-- SMB: `root.Network.Share.*` parameter group
-- Motion detection: `root.Motion.*` or `root.ImageSource.I0.Sensor.Motion.*` parameter group
+```
+POST /axis-cgi/apidiscovery.cgi   {"apiVersion":"1.0","method":"getApiList"}
+GET  /axis-cgi/param.cgi?action=list&group=root.Brand,root.Properties.Firmware
+GET  /axis-cgi/applications/list.cgi
+```
+
+Two habits that repeatedly proved faster than guessing:
+
+- **Read the camera's own web UI network traffic.** Several settings live on
+  endpoints that `apidiscovery.cgi` does not usefully name. Toggling the setting
+  in the UI and reading the resulting request is definitive; guessing method
+  names is not. Both the NTP fallback and DLPU endpoints below were found this
+  way after JSON-RPC-style guesses all returned "method does not exist".
+- **Read a parameter back after writing it.** `param.cgi` accepts and stores
+  malformed values without complaint, so a write returning 200 is not evidence
+  the intended value landed.
+
+#### Verified parameter groups (`param.cgi`)
+
+| Group / parameter | Generation | Notes |
+|---|---|---|
+| `root.NetworkShare.N0.{Address,Share,Username,Password}` | 5.x only | **Errors with `Error -1` on 12.x**, despite `root.Properties.NetworkShare` existing there. SMB is a genuine dead end on the newer generation — not a bug to debug. |
+| `root.Motion.M<n>.{Left,Right,Top,Bottom,Sensitivity,Name}` | 5.x only | Full frame is `0/9999/0/9999`. Empty or erroring on 12.x — VMD4 does not use it. |
+| `root.Storage.S0.CleanupMaxAge` | both | SD card (`SD_DISK`). |
+| `root.Storage.S1.CleanupMaxAge` | both | Network share. Same semantics as S0; `0` = unlimited, leaving the card as a rolling buffer managed by its own fill-based cleanup policy rather than by age. |
+| `root.Time.POSIXTimeZone` | both | |
+| `root.Time.NTP.Server`, `root.Time.ObtainFromDHCP` | both | **Reads/writes only the first entry** of the same list the modern REST endpoint exposes. Insufficient on its own — see NTP below. |
+| `root.Network.HostName`, `root.Network.VolatileHostName.HostName` | both | Static vs DHCP-assigned. Determines storage namespacing (FR50). |
+| `root.Properties.Firmware.Version` | both | Read-only precondition (FR39/FR40). |
+| `root.Sds3sync.*` | 12.x | Sync ACAP config: `S3Endpoint`, `S3Region`, `S3Bucket`, `S3AccessKey`, `S3SecretKey`, `S3PathStyle`, `S3InsecureTLS`, `RecordingPath`, `IntervalSeconds`, `HeartbeatIntervalSeconds`, `Prefix`. `Prefix` is deliberately unmanaged (FR51). |
+
+**Identical config does not imply identical behaviour.** Two cameras reported
+byte-identical `root.Time` values while one had a correct clock and the other
+was frozen years in the past, because DHCP was silently handing out no NTP
+source on that network. Where a setting has an observable effect, verify the
+effect (for the clock: the HTTP `Date:` response header), not just the
+parameter.
+
+#### Motion detection: two incompatible APIs
+
+The generations do not share a motion model, and this is the single largest
+source of divergence between profiles.
+
+**Legacy (`root.Motion`, AXIS OS 5.x)** — window-based, with one 0–100
+`Sensitivity` scalar per window.
+
+**VMD4 (`/local/vmd/control.cgi`, AXIS OS 12.x)** — a JSON control API on the
+built-in `vmd` application. Detection rule: if `param.cgi` `Motion` comes back
+empty *and* `applications/list.cgi` shows `vmd` Running, the camera is VMD4.
+
+```
+POST /local/vmd/control.cgi   {"apiVersion":"1.4","method":"getConfiguration"}
+POST /local/vmd/control.cgi   {"apiVersion":"1.4","method":"setConfiguration","params":{...}}
+```
+
+- **There is no sensitivity scalar.** Tuning is filter-based:
+  `sizePercentage` (minimum object size as % of frame; lower is more sensitive,
+  documented floor `3`), `timeShortLivedLimit`, `distanceSwayingObject`.
+- **The write payload key is `params`, not `data`** — unlike the
+  `/config/rest/` family below, which uses `data`. Easy to conflate.
+- **Read-modify-write the fetched payload**; never push a constructed one.
+  `configurationStatus`, profile `uid`/`name`, and unrelated trigger types must
+  survive the round trip.
+- The factory-default profile's `includeArea` trigger does **not** cover the
+  full frame (~97% on 12.x, ~60% on the legacy app's own area). Motion outside
+  it never fires (FR49). Full frame is the corner set
+  `[[-1,-1],[-1,1],[1,1],[1,-1]]`.
+- The app can ship `Stopped` on factory units and after major-version firmware
+  upgrades; it must be started before it will do anything.
+
+#### Events and actions: Action1 SOAP only
+
+**As of AXIS OS 12 there is still no modern REST API for events, actions, or
+recipients** — `apidiscovery.cgi` will not list one. The legacy Action1 SOAP
+service at `/vapix/services` remains the only way to configure action rules on
+the newest firmware. Do not go looking for a REST replacement.
+
+Every action is a **two-step** creation: `AddActionConfiguration` (what to do,
+returns a `ConfigurationID`) then `AddActionRule` (when to do it, referencing
+that ID as `PrimaryAction`).
+
+Three gotchas, all confirmed against real hardware:
+
+- **No in-place edit.** `SetActionConfigurationParameters` returns
+  `Optional action not implemented`. Changing any parameter means
+  `RemoveActionRule` + `RemoveActionConfiguration`, then recreating both — which
+  is exactly why FR48 is written as remove-and-recreate rather than update.
+- **The "any profile" topic wildcard is read-only.**
+  `tnsaxis:CameraApplicationPlatform/VMD/Camera1ProfileANY` round-trips fine on
+  `GetActionRules` for pre-existing rules, but `AddActionRule` **rejects** it
+  with `failed to parse topic expression`. Note the fault message mangles the
+  `tnsaxis:` prefix to `axis:` — a red herring, not the actual problem. Create
+  rules against the concrete topic (`.../Camera1Profile<uid>`) instead (FR47).
+- **Namespaces must all be declared on `soap:Envelope`:** `soap`, `aa`,
+  `wsnt="http://docs.oasis-open.org/wsn/b-2"`,
+  `tns1="http://www.onvif.org/ver10/topics"`,
+  `tnsaxis="http://www.axis.com/2009/event/topics"`.
+
+Event topics and message filters in use:
+
+| Motion source | Topic | Message content filter |
+|---|---|---|
+| Built-in window motion | `tns1:VideoAnalytics/tnsaxis:MotionDetection` | `//SimpleItem[@Name="motion" and @Value="1"]`, plus a `window` clause when a full-frame window id is known |
+| Legacy VMD app | `tns1:RuleEngine/tnsaxis:VideoMotionDetection/motion` | `active=1` and `areaid=0` |
+| VMD4 | `tnsaxis:CameraApplicationPlatform/VMD/Camera1Profile<uid>` | `active=1` |
+
+Recording actions use template token
+`com.axis.action.unlimited.recording.storage` with `storage_id` of
+`NetworkShare` or `SD_DISK`, plus `pre_duration`/`post_duration` in
+milliseconds.
+
+#### Modern REST config API (`/config/rest/...`)
+
+A third family, distinct from both `param.cgi` and the `*.cgi` JSON-RPC
+endpoints. Writes mirror the `data` envelope that the GET returns — posting
+bare fields fails with `There is no 'data' field in the request body`.
+
+**NTP fallback servers** — the camera's real multi-entry fallback list, of which
+the legacy `root.Time.NTP.Server` param is only the first element:
+
+```
+GET  /config/rest/network-time-sync/v1/ntp/client
+POST /config/rest/network-time-sync/v1/ntp/client   {"data":{"staticServers":[...]}}
+```
+
+`staticServers` is a **full replace, not an append** — post the complete
+intended list or existing entries are dropped. `apidiscovery.cgi`'s `"id":"ntp"`
+entry is *not* this API and is a red herring for it.
+
+**DLPU / object-detection engine** — the Deep Learning Processing Unit backing
+AXIS Object Analytics. Not managed by cctv, documented because it is invisible
+to a `param.cgi` audit:
+
+```
+GET   /config/rest/video-analytics/v1/dlpu/enabled
+PATCH /config/rest/video-analytics/v1/dlpu/enabled   {"data":false}
+```
+
+#### ACAP application lifecycle
+
+```
+POST /axis-cgi/applications/upload.cgi              (multipart field name: packfil)
+GET  /axis-cgi/applications/control.cgi?action=start|stop&package=<name>
+GET  /axis-cgi/applications/list.cgi
+GET  /axis-cgi/admin/systemlog.cgi?appname=<name>
+```
+
+- **Package name is not known until after install** and varies by package
+  version — the legacy VMD `.eap` installs as `VideoMotionDetection`, not `vmd`.
+  Re-list after uploading and use whatever name appears.
+- **`Status="Idle"` is not `Stopped`.** The legacy VMD 2.2.1 app settles into
+  `Idle` once running. Treating anything-but-`Running` as stopped re-issues a
+  start call on every reconcile; only `Stopped` should trigger a start.
+- **The sync ACAP reads its config only at startup.** Started before its
+  `root.Sds3sync.*` params exist, it logs `not configured yet` and sits idle
+  indefinitely even after the params are later written. Hence FR42's ordering
+  rule: configure first, then start; restart if config changed while running.
+- **Re-uploading the same package name upgrades in place.** Confirmed the app
+  stayed `Running` throughout, with its stored config and its uploaded-file
+  dedup state intact.
+- **Unsigned packages are not rejected** when `AllowUnsigned` is `true`
+  (`applications/config.cgi?action=get&name=AllowUnsigned`), which is the
+  default observed across this fleet — a signed build ran alongside an unsigned
+  one of the same app for months. Prefer signed packages anyway, since that
+  clears the camera's own "ACAP apps: Unsigned" security warning, but do not
+  treat signing as a hard technical requirement; it is not one.
+
+#### What `param.cgi` does *not* cover
+
+A full `param.cgi?action=list` dump is the natural way to diff a new camera
+against a known-good reference, and it is genuinely useful — but it is not the
+whole configuration surface, and treating it as complete hides real
+differences. At least three categories live entirely outside it:
+
+- **Installed-app metadata** — version, `Status`, and `SignatureStatus` come
+  from `applications/list.cgi`. A signed-vs-unsigned build difference between
+  two cameras is invisible to a `param.cgi` diff.
+- **`/config/rest/...` settings** — e.g. the DLPU toggle above.
+- **Web-UI display preferences** — a generic per-key store, no `get`
+  counterpart (404), verifiable only in the browser:
+  `/axis-cgi/clientnotes/set.cgi?group=<g>&key=<k>&value=<v>`.
+
+When auditing fleet drift, diff **both** `param.cgi?action=list` and
+`applications/list.cgi`. Expect identity-only noise in the former (hostname,
+MAC, IP, serial, RTP multicast addresses, per-camera storage prefixes) and
+ignore it.
 
 ### Error Handling & Result Model
 
@@ -206,6 +399,94 @@ class CameraResult:
 **Rationale:** Zero overhead for a personal tool. PyPI release deferred to post-MVP if broader adoption warrants it.
 
 **`pyproject.toml` install mode during development:** `pip install -e .`
+
+### Rejected Alternatives
+
+Approaches investigated against real hardware and deliberately not adopted.
+Recorded because the investigation cost was real and the findings would
+otherwise be re-derived from scratch.
+
+#### Direct SFTP clip upload from the camera
+
+**Rejected in favour of** SD-card recording plus the `sd_to_s3_sync` ACAP.
+
+Axis cameras can upload video clips over SFTP natively, via the
+`com.axis.action.unlimited.send_videoclip.sftp` action template — no third-party
+app required. This was implemented end-to-end against a Synology NAS before
+being abandoned. It works, but couples every camera directly to one always-on
+NAS, offers no retry or dedup when that NAS is unreachable, and puts the
+credentials for a writable NAS account on every camera. SD-buffer-then-sync
+degrades better: the camera keeps recording while the destination is down, and
+the ACAP owns retry and dedup.
+
+If it is ever revisited, these cost the most to find:
+
+- **`ssh_auth_type` is the parameter that matters.** `1` = public key, which
+  Axis's own docs mark *"currently not supported"*; `2` = password. Leaving it
+  at `1` while setting a `password` makes the camera attempt unsupported pubkey
+  auth, fail, and report a generic misleading error (`Login denied` on older
+  firmware, `Failed to transfer data` on newer) **without ever sending a
+  password login attempt.** It is indistinguishable from a network, credential,
+  or firmware fault from the camera's logs alone. Check this first.
+  - Diagnosed by packet capture (full TCP+SSH handshake and key exchange, then
+    a clean FIN before any userauth) confirmed against `sshd` at `LogLevel
+    DEBUG3` — a deliberately wrong password from another client always produced
+    an authentication-failure line, the camera's connections produced none.
+  - A two-major-version firmware upgrade did **not** fix it; the bug was a
+    config value, not the bundled libssh2.
+- **`create_folder` is not a boolean.** Whatever string it holds becomes a
+  literal extra subfolder name under `upload_path` — `"yes"` creates a folder
+  named `yes`. Use `""` to write directly into `upload_path`.
+- **Synology-specific:** a share's Windows ACL can allow "create files" while
+  denying "create folders", breaking auto-provisioning while plain writes
+  succeed; and setting a DSM home directory for the SFTP account mid-setup
+  silently re-roots its chroot, invalidating any absolute `upload_path`
+  configured earlier.
+
+#### Automated firmware upgrades
+
+**Rejected permanently** — see FR40. The upgrade API works
+(`/axis-cgi/firmwaremanagement.cgi`, multipart `data` JSON part plus `fwimage`),
+but a real upgrade failure observed on two units showed why it does not belong
+in an unattended convergence loop: a direct jump across two major versions was
+accepted with `200 OK`, rebooted, failed initialisation, and auto-rolled back
+within about a minute:
+
+```
+fwmgr-init: Rebooting to rollback firmware upgrade. Reason: Firmware initialization failed.
+rrdetect: Firmware rollback detected after 0 min.
+```
+
+Axis's dual-bank safety net meant no lasting damage — but the target firmware
+never applied, and the camera reported success. Crossing major versions needs
+an intermediate hop, verification between hops, and a human watching. cctv
+therefore treats firmware as a **precondition it checks and refuses to act on**,
+never a target it converges (FR39/FR40).
+
+Operator notes for doing it by hand: upgrade one major version at a time; after
+each hop poll `root.Properties.Firmware.Version` until it reports the target,
+then check `root.Brand` for basic health and grep the system log for
+`rollback|initialization failed` to catch a silent rollback. A hop that never
+drops reachability is itself a warning sign — a real upgrade reboots the camera.
+
+### Deliberately Unmanaged Settings
+
+Settings this fleet cares about that cctv does **not** converge. Listed so an
+audit diff against a reference camera does not read them as regressions, and so
+the boundary stays explicit rather than accidental.
+
+| Setting | Why unmanaged |
+|---|---|
+| `root.ImageSource.I0.CaptureFrequency` | Mains flicker frequency — a property of the installation site (50/60 Hz), not of the fleet. |
+| `root.Tampering.T0.DarkDetectionEnabled` | Site/scene judgement. |
+| `root.ImageSource.I0.CameraTiltOrientation` | **Tied to physical mounting.** Copying a reference camera's value is only correct if the new unit is mounted identically; a wrong value rotates the recorded image. Always check the live image before setting it — never infer it from a config diff. |
+| DLPU / object-detection engine | Only matters when `objectanalytics` is running, which it is not anywhere in this fleet. |
+| Web-UI 24-hour clock preference | Pure display preference, per-browser-key store, no read-back API. |
+| `objectanalytics` application | Not part of the recording pipeline on any camera. Left alone deliberately. |
+
+Diagnostic access — SSH shell (`root.Network.SSH.Enabled`, normally `no`),
+elevated log levels — is likewise unmanaged and must be reverted by hand after
+any invasive debugging session.
 
 ### Decision Impact Analysis
 

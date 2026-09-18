@@ -54,9 +54,9 @@ def test_apply_all_error_contains_reason_not_credentials(camera_config, mock_aut
         results = apply_all([CAM1], camera_config, mock_auth)
     assert "timeout" in results[0].error
     assert camera_config.password not in results[0].error
-    assert camera_config.smb_password not in results[0].error
+    assert camera_config.profiles[0].storage.smb.password not in results[0].error
     assert camera_config.username not in results[0].error
-    assert camera_config.smb_username not in results[0].error
+    assert camera_config.profiles[0].storage.smb.username not in results[0].error
 
 
 def test_apply_all_empty_fleet_returns_empty_list(camera_config, mock_auth) -> None:

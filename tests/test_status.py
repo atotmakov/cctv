@@ -2,6 +2,8 @@ from __future__ import annotations
 
 from unittest.mock import patch
 
+import pytest
+
 from cctv.status import collect_status, collect_all, CameraStatusResult
 from cctv.scanner import DiscoveredCamera
 from cctv.vapix import VapixError
@@ -10,6 +12,17 @@ CAM1 = DiscoveredCamera(ip="192.168.1.101", model="AXIS P3245-V")
 CAM2 = DiscoveredCamera(ip="192.168.1.102", model="AXIS P3245-V")
 
 # Every VAPIX call that mutates camera state — status.py must NEVER call any of these.
+@pytest.fixture(autouse=True)
+def _stub_network_share_api():
+    """collect_status queries the networkshare API before falling back to
+    root.NetworkShare params. Stub it out so these tests never touch the real
+    network (unstubbed it burns the full connect timeout per test). Tests that
+    exercise the API path patch it again themselves — the inner patch wins.
+    """
+    with patch("cctv.status.vapix.get_network_shares", return_value=[]):
+        yield
+
+
 _WRITE_PATCH_TARGETS = [
     "cctv.vapix.set_params",
     "cctv.vapix.add_action_configuration",
@@ -75,7 +88,7 @@ def test_collect_status_never_includes_passwords(
     assert not hasattr(result, "smb_password")
     assert not hasattr(result, "password")
     for value in vars(result).values():
-        assert camera_config.smb_password not in str(value)
+        assert camera_config.profiles[0].storage.smb.password not in str(value)
         assert camera_config.password not in str(value)
 
 
@@ -496,4 +509,81 @@ def test_collect_all_error_never_contains_credentials(camera_config, mock_auth) 
     with patch("cctv.status.collect_status", side_effect=VapixError(error_msg)):
         results = collect_all([CAM1], camera_config, mock_auth)
     assert camera_config.password not in results[0].error
-    assert camera_config.smb_password not in results[0].error
+    assert camera_config.profiles[0].storage.smb.password not in results[0].error
+
+
+# ---------------------------------------------------------------------------
+# Network share reporting — must not depend on the internal Nx param index.
+# ---------------------------------------------------------------------------
+
+def test_collect_status_reads_share_from_networkshare_api(
+    camera_config, mock_auth, motion_params_response, storage_params_response,
+    time_params_response, vmd_app_running, motion_action_config, motion_action_rule,
+) -> None:
+    """Share comes from the camera's own API, so no root.NetworkShare params are needed."""
+    from cctv.vapix import ConfiguredNetworkShare
+    share = ConfiguredNetworkShare(
+        share_id="10991", nice_name="cctv", address="192.168.1.100",
+        share="cctv", user="cctv", disk_id="NetworkShare",
+    )
+    with patch("cctv.status.vapix.get_applications", return_value=[vmd_app_running]), \
+         patch("cctv.status.vapix.get_action_configurations", return_value=[motion_action_config]), \
+         patch("cctv.status.vapix.get_action_rules", return_value=[motion_action_rule]), \
+         patch("cctv.status.vapix.get_network_shares", return_value=[share]), \
+         patch("cctv.status.vapix.get_params") as mock_get:
+        # note: no smb_params_response — the API path must not consult param.cgi for it
+        mock_get.side_effect = [motion_params_response, storage_params_response, time_params_response]
+        result = collect_status(CAM1, camera_config, mock_auth)
+
+    assert result.smb_ip == "192.168.1.100"
+    assert result.smb_share == "cctv"
+    assert result.smb_username == "cctv"
+
+
+def test_collect_status_share_at_n1_via_param_fallback(
+    camera_config, mock_auth, motion_params_response, storage_params_response,
+    time_params_response, vmd_app_running, motion_action_config, motion_action_rule,
+) -> None:
+    """API unavailable → falls back to params and still finds a share parked at N1.
+
+    Regression: a hardcoded root.NetworkShare.N0 lookup reported smb_ip=None on
+    192.168.1.60, whose working share sits at N1.
+    """
+    smb_at_n1 = {
+        "root.NetworkShare.N1.Address": "192.168.1.100",
+        "root.NetworkShare.N1.Share": "cctv",
+        "root.NetworkShare.N1.Username": "cctv",
+    }
+    with patch("cctv.status.vapix.get_applications", return_value=[vmd_app_running]), \
+         patch("cctv.status.vapix.get_action_configurations", return_value=[motion_action_config]), \
+         patch("cctv.status.vapix.get_action_rules", return_value=[motion_action_rule]), \
+         patch("cctv.status.vapix.get_network_shares", side_effect=VapixError("no such endpoint")), \
+         patch("cctv.status.vapix.get_params") as mock_get:
+        mock_get.side_effect = [motion_params_response, smb_at_n1, storage_params_response, time_params_response]
+        result = collect_status(CAM1, camera_config, mock_auth)
+
+    assert result.smb_ip == "192.168.1.100"
+    assert result.smb_share == "cctv"
+    assert result.smb_username == "cctv"
+
+
+def test_collect_status_prefers_networkshare_disk_when_several_shares(
+    camera_config, mock_auth, motion_params_response, storage_params_response,
+    time_params_response, vmd_app_running, motion_action_config, motion_action_rule,
+) -> None:
+    """A leftover unbound share must not shadow the one actually backing storage."""
+    from cctv.vapix import ConfiguredNetworkShare
+    shares = [
+        ConfiguredNetworkShare("48033", "recipientStorage-0", "192.168.1.200", "other", "someone", ""),
+        ConfiguredNetworkShare("10991", "cctv", "192.168.1.100", "cctv", "cctv", "NetworkShare"),
+    ]
+    with patch("cctv.status.vapix.get_applications", return_value=[vmd_app_running]), \
+         patch("cctv.status.vapix.get_action_configurations", return_value=[motion_action_config]), \
+         patch("cctv.status.vapix.get_action_rules", return_value=[motion_action_rule]), \
+         patch("cctv.status.vapix.get_network_shares", return_value=shares), \
+         patch("cctv.status.vapix.get_params") as mock_get:
+        mock_get.side_effect = [motion_params_response, storage_params_response, time_params_response]
+        result = collect_status(CAM1, camera_config, mock_auth)
+
+    assert result.smb_ip == "192.168.1.100"
+    assert result.smb_username == "cctv"

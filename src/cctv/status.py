@@ -9,10 +9,12 @@ from cctv.config import CameraConfig
 from cctv.scanner import DiscoveredCamera
 from cctv import vapix
 from cctv.reconciler import (
+    find_network_share_index,
     find_vmd_app,
     find_full_frame_window_id,
     full_frame_sensitivity_key,
     parse_motion_windows,
+    smb_param_keys,
 )
 
 # ---------------------------------------------------------------------------
@@ -222,7 +224,26 @@ def collect_status(
         for r in action_rules
     )
 
-    smb = vapix.get_params(camera.ip, _SMB_GROUP, auth, config.timeout)
+    # Read the share via the camera's own networkshare API rather than
+    # root.NetworkShare.N0.* — the Nx index is internal bookkeeping and is not
+    # always N0 (see vapix.get_network_shares). Reading a fixed N0 made .60
+    # report smb_ip=None while its share sat, working, at N1. Fall back to the
+    # param group (resolving the real index) if the endpoint isn't available.
+    try:
+        shares = vapix.get_network_shares(camera.ip, auth, config.timeout)
+    except vapix.VapixError:
+        shares = []
+
+    if shares:
+        active = next((s for s in shares if s.disk_id == "NetworkShare"), shares[0])
+        smb_ip, smb_share, smb_username = active.address, active.share, active.user
+    else:
+        smb = vapix.get_params(camera.ip, _SMB_GROUP, auth, config.timeout)
+        host_key, share_key, user_key, _ = smb_param_keys(find_network_share_index(smb))
+        smb_ip = smb.get(host_key)
+        smb_share = smb.get(share_key)
+        smb_username = smb.get(user_key)
+
     storage = vapix.get_params(camera.ip, _STORAGE_GROUP, auth, config.timeout)
     time = vapix.get_params(camera.ip, _TIME_GROUP, auth, config.timeout)
 
@@ -244,9 +265,9 @@ def collect_status(
         motion_window_detail=motion_window_detail,
         action_rules=action_rules,
         motion_rule_mismatch=motion_rule_mismatch,
-        smb_ip=smb.get(_SMB_HOST),
-        smb_share=smb.get(_SMB_SHARE),
-        smb_username=smb.get(_SMB_USER),
+        smb_ip=smb_ip,
+        smb_share=smb_share,
+        smb_username=smb_username,
         timezone=time.get(_TIME_TIMEZONE),
         retention_days=storage.get(_STORAGE_RETENTION),
     )

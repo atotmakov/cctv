@@ -1,26 +1,94 @@
-subnet: 192.168.1.0/24
+subnet: 192.168.0.0/24
 
 credentials:
   username: root
   password: changeme  # plaintext — do not commit cameras.yaml to public repos
 
-smb:
-  ip: 192.168.1.10
-  share: /mnt/cctv
-  username: smbuser
-  password: smbpass
+timeout: 5  # per-camera connection timeout in seconds (default: 5)
 
-motion_detection:
-  enabled: true
-  sensitivity: 90
-  pre_trigger_time: 5   # seconds to record before motion event (default: 5)
-  post_trigger_time: 5  # seconds to record after motion event (default: 5)
-  # app_package_path: /path/to/vmd.eap  # required only for legacy cameras that don't
-  #   ship with the AXIS Video Motion Detection app pre-installed; the tool uploads
-  #   and installs it from this local file before configuring motion detection
+# --- fleet-wide settings, applied to every discovered camera regardless of profile ---
 
-recording_retention_days: 33  # remove network share recordings older than this many days (default: 33)
+ntp_fallback_servers:  # omit or leave empty to leave camera NTP fallback config unchanged
+  - pool.ntp.org
+  - ntp1.vniiftri.ru
 
 timezone: CET-1CEST,M3.5.0,M10.5.0/3  # POSIX timezone string — omit to leave camera timezone unchanged
 
-timeout: 5  # per-camera connection timeout in seconds (default: 5)
+recording_retention_days: 33  # 0 = unlimited; maps to S0.CleanupMaxAge (SD) or S1.CleanupMaxAge
+                               # (NetworkShare) depending on each camera's matched profile.storage.backend
+
+# --- profiles: each camera is routed to the first profile whose match.models
+# contains a substring of its reported model name. A camera matching no
+# profile is reported as a failure, not silently skipped. ---
+
+profiles:
+  # Legacy fleet (AXIS OS 5.x): SMB network-share recording, legacy VMD app / root.Motion.
+  - name: legacy-smb
+    match:
+      models: [M3005, P1204, M2014-E]
+
+    target_firmware: "5.51.7.4"
+      # Precondition checked FIRST, before anything else in this profile — a
+      # mismatch fails that camera immediately with no settings applied.
+      # cctv never upgrades firmware itself; omit (or set to null) to skip
+      # this check entirely for a profile.
+
+    applications:
+      video_motion_detection:
+        app_package_path: /path/to/AXIS_Video_Motion_Detection_2_2_1.eap
+          # Required only for legacy cameras that don't ship with the AXIS
+          # Video Motion Detection app pre-installed; the tool uploads and
+          # installs it from this local file before configuring motion
+          # detection. Omit if the app is already installed.
+
+    motion_detection:
+      enabled: true
+      sensitivity: 90
+      pre_trigger_time: 5   # seconds to record before motion event (default: 5)
+      post_trigger_time: 5  # seconds to record after motion event (default: 5)
+
+    storage:
+      backend: smb
+      smb:
+        ip: 192.168.1.10
+        share: /mnt/cctv
+        username: smbuser
+        password: smbpass
+
+  # M3085-V (AXIS OS 12.x): SD card recording + third-party "SD to S3 Sync"
+  # ACAP, built-in VMD4 (no install needed — always bundled on this model).
+  - name: m3085v-sd-s3sync
+    match:
+      models: [M3085-V]
+
+    target_firmware: "12.11.72"
+
+    applications:
+      sd_to_s3_sync:
+        app_package_path: /path/to/signed_SD_to_S3_Sync_0_9_5_aarch64.eap
+          # Use the SIGNED build if you have one — clears the "ACAP apps:
+          # Unsigned" warning on the camera's own Status page. Unsigned
+          # builds also work as long as the camera's own AllowUnsigned
+          # setting is true (check via applications/config.cgi before
+          # assuming otherwise).
+
+    motion_detection:
+      enabled: true
+      # VMD4 is filter-based, not a single 0-100 sensitivity knob:
+      size_percentage: [5, 5]        # min object size, % of frame width/height — lower = more sensitive (floor: 3)
+      time_short_lived_limit: 1      # seconds an object must persist to count as motion
+      distance_swaying_object: 5     # % of frame a swaying object must move to count as motion
+      pre_trigger_time: 5
+      post_trigger_time: 2
+
+    storage:
+      backend: sd_s3sync
+      sd_s3sync:
+        endpoint: https://s3.example-provider.com
+        region: us-east-1
+        bucket: my-cctv-bucket
+        access_key: REPLACE_ME
+        secret_key: REPLACE_ME  # plaintext — same do-not-commit caveat as smb.password above
+        # No `prefix` field here — the app auto-derives one from each
+        # camera's own hostname on first run, so every camera gets its own
+        # namespace in the shared bucket automatically.

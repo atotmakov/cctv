@@ -9,46 +9,48 @@ subnet: 192.168.1.0/24
 credentials:
   username: root
   password: testpass
-smb:
-  ip: 192.168.1.10
-  share: /mnt/cctv
-  username: smbuser
-  password: smbpass
-motion_detection:
-  enabled: true
-  sensitivity: 50
 timeout: 5
+profiles:
+  - name: legacy-smb
+    match:
+      models: [M3005, P1204]
+    motion_detection:
+      enabled: true
+      sensitivity: 50
+    storage:
+      backend: smb
+      smb:
+        ip: 192.168.1.10
+        share: /mnt/cctv
+        username: smbuser
+        password: smbpass
 """
 
-YAML_WITHOUT_TIMEOUT = """\
-subnet: 192.168.1.0/24
-credentials:
-  username: root
-  password: testpass
-smb:
-  ip: 192.168.1.10
-  share: /mnt/cctv
-  username: smbuser
-  password: smbpass
-motion_detection:
-  enabled: true
-  sensitivity: 50
-"""
+YAML_WITHOUT_TIMEOUT = VALID_YAML.replace("timeout: 5\n", "")
 
-YAML_EXPLICIT_TIMEOUT = """\
-subnet: 192.168.1.0/24
-credentials:
-  username: root
-  password: testpass
-smb:
-  ip: 192.168.1.10
-  share: /mnt/cctv
-  username: smbuser
-  password: smbpass
-motion_detection:
-  enabled: true
-  sensitivity: 50
-timeout: 10
+YAML_EXPLICIT_TIMEOUT = VALID_YAML.replace("timeout: 5\n", "timeout: 10\n")
+
+S3_PROFILE_YAML = """\
+  - name: m3085v-sd-s3sync
+    match:
+      models: [M3085-V]
+    target_firmware: "12.11.72"
+    applications:
+      sd_to_s3_sync:
+        app_package_path: /opt/eap/signed_SD_to_S3_Sync_0_9_5_aarch64.eap
+    motion_detection:
+      enabled: true
+      size_percentage: [5, 5]
+      time_short_lived_limit: 1
+      distance_swaying_object: 5
+    storage:
+      backend: sd_s3sync
+      sd_s3sync:
+        endpoint: https://s3.example-provider.com
+        region: us-east-1
+        bucket: my-cctv-bucket
+        access_key: AKIA
+        secret_key: SECRET
 """
 
 
@@ -60,13 +62,22 @@ def test_load_valid_config(tmp_path: Path) -> None:
     assert cfg.subnet == "192.168.1.0/24"
     assert cfg.username == "root"
     assert cfg.password == "testpass"
-    assert cfg.smb_ip == "192.168.1.10"
-    assert cfg.smb_share == "/mnt/cctv"
-    assert cfg.smb_username == "smbuser"
-    assert cfg.smb_password == "smbpass"
-    assert cfg.motion_enabled is True
-    assert cfg.motion_sensitivity == 50
     assert cfg.timeout == 5
+
+    assert len(cfg.profiles) == 1
+    profile = cfg.profiles[0]
+    assert profile.name == "legacy-smb"
+    assert profile.models == ["M3005", "P1204"]
+    assert profile.target_firmware is None
+    assert profile.applications == {}
+    assert profile.motion_detection["enabled"] is True
+    assert profile.motion_detection["sensitivity"] == 50
+    assert profile.storage.backend == "smb"
+    assert profile.storage.sd_s3sync is None
+    assert profile.storage.smb.ip == "192.168.1.10"
+    assert profile.storage.smb.share == "/mnt/cctv"
+    assert profile.storage.smb.username == "smbuser"
+    assert profile.storage.smb.password == "smbpass"
 
 
 def test_timeout_defaults_to_5(tmp_path: Path) -> None:
@@ -99,40 +110,24 @@ def test_empty_file(tmp_path: Path) -> None:
 
 
 def test_missing_top_level_key(tmp_path: Path) -> None:
-    # Missing 'smb' section
     yaml_content = """\
 subnet: 192.168.1.0/24
 credentials:
   username: root
   password: testpass
-motion_detection:
-  enabled: true
-  sensitivity: 50
 """
     config_file = tmp_path / "cameras.yaml"
     config_file.write_text(yaml_content)
-    with pytest.raises(ConfigError, match="smb"):
+    with pytest.raises(ConfigError, match="profiles"):
         load_config(config_file)
 
 
 def test_missing_nested_key(tmp_path: Path) -> None:
-    # smb section present but missing 'ip'
-    yaml_content = """\
-subnet: 192.168.1.0/24
-credentials:
-  username: root
-  password: testpass
-smb:
-  share: /mnt/cctv
-  username: smbuser
-  password: smbpass
-motion_detection:
-  enabled: true
-  sensitivity: 50
-"""
+    """storage.smb present but missing 'ip' → error names the full path."""
+    yaml_content = VALID_YAML.replace("        ip: 192.168.1.10\n", "")
     config_file = tmp_path / "cameras.yaml"
     config_file.write_text(yaml_content)
-    with pytest.raises(ConfigError, match="smb.ip"):
+    with pytest.raises(ConfigError, match=r"profiles\[0\]\.storage\.smb\.ip"):
         load_config(config_file)
 
 
@@ -166,42 +161,22 @@ def test_recording_retention_days_explicit(tmp_path: Path) -> None:
     assert cfg.recording_retention_days == 14
 
 
-def test_motion_trigger_times_default_to_5(tmp_path: Path) -> None:
-    config_file = tmp_path / "cameras.yaml"
-    config_file.write_text(VALID_YAML)
-    cfg = load_config(config_file)
-    assert cfg.motion_pre_trigger_time == 5
-    assert cfg.motion_post_trigger_time == 5
-
-
-def test_motion_trigger_times_loaded_when_present(tmp_path: Path) -> None:
+def test_motion_detection_kept_as_opaque_mapping(tmp_path: Path) -> None:
+    """motion_detection shape varies by camera generation, so config.py passes it
+    through untouched rather than pinning it to the legacy sensitivity schema."""
     yaml_content = VALID_YAML.replace(
-        "  sensitivity: 50",
-        "  sensitivity: 50\n  pre_trigger_time: 10\n  post_trigger_time: 15",
+        "      sensitivity: 50",
+        "      sensitivity: 50\n      pre_trigger_time: 10\n      post_trigger_time: 15",
     )
     config_file = tmp_path / "cameras.yaml"
     config_file.write_text(yaml_content)
     cfg = load_config(config_file)
-    assert cfg.motion_pre_trigger_time == 10
-    assert cfg.motion_post_trigger_time == 15
-
-
-def test_motion_app_package_path_defaults_to_none(tmp_path: Path) -> None:
-    config_file = tmp_path / "cameras.yaml"
-    config_file.write_text(VALID_YAML)
-    cfg = load_config(config_file)
-    assert cfg.motion_app_package_path is None
-
-
-def test_motion_app_package_path_loaded_when_present(tmp_path: Path) -> None:
-    yaml_content = VALID_YAML.replace(
-        "  sensitivity: 50",
-        "  sensitivity: 50\n  app_package_path: /opt/eap/vmd_4.3-1.eap",
-    )
-    config_file = tmp_path / "cameras.yaml"
-    config_file.write_text(yaml_content)
-    cfg = load_config(config_file)
-    assert cfg.motion_app_package_path == "/opt/eap/vmd_4.3-1.eap"
+    assert cfg.profiles[0].motion_detection == {
+        "enabled": True,
+        "sensitivity": 50,
+        "pre_trigger_time": 10,
+        "post_trigger_time": 15,
+    }
 
 
 def test_timezone_optional_defaults_to_none(tmp_path: Path) -> None:
@@ -220,11 +195,138 @@ def test_timezone_loaded_when_present(tmp_path: Path) -> None:
 
 
 def test_timeout_null_value(tmp_path: Path) -> None:
-    # 'timeout:' with no value → yaml.safe_load gives None → should default to 5
-    yaml_content = VALID_YAML + "timeout:\n"
-    # The VALID_YAML already has timeout: 5, so build from YAML_WITHOUT_TIMEOUT
+    """'timeout:' with no value → yaml.safe_load gives None → defaults to 5."""
     yaml_content = YAML_WITHOUT_TIMEOUT + "timeout:\n"
     config_file = tmp_path / "cameras.yaml"
     config_file.write_text(yaml_content)
     cfg = load_config(config_file)
     assert cfg.timeout == 5
+
+
+# --- Fleet-wide NTP fallback ---
+
+
+def test_ntp_fallback_servers_default_empty(tmp_path: Path) -> None:
+    config_file = tmp_path / "cameras.yaml"
+    config_file.write_text(VALID_YAML)
+    cfg = load_config(config_file)
+    assert cfg.ntp_fallback_servers == []
+
+
+def test_ntp_fallback_servers_loaded_when_present(tmp_path: Path) -> None:
+    yaml_content = VALID_YAML + "ntp_fallback_servers: [pool.ntp.org, ntp1.vniiftri.ru]\n"
+    config_file = tmp_path / "cameras.yaml"
+    config_file.write_text(yaml_content)
+    cfg = load_config(config_file)
+    assert cfg.ntp_fallback_servers == ["pool.ntp.org", "ntp1.vniiftri.ru"]
+
+
+def test_ntp_fallback_servers_scalar_rejected(tmp_path: Path) -> None:
+    yaml_content = VALID_YAML + "ntp_fallback_servers: pool.ntp.org\n"
+    config_file = tmp_path / "cameras.yaml"
+    config_file.write_text(yaml_content)
+    with pytest.raises(ConfigError, match="ntp_fallback_servers"):
+        load_config(config_file)
+
+
+# --- Profiles ---
+
+
+def test_profiles_must_be_non_empty_list(tmp_path: Path) -> None:
+    yaml_content = VALID_YAML.split("profiles:")[0] + "profiles: []\n"
+    config_file = tmp_path / "cameras.yaml"
+    config_file.write_text(yaml_content)
+    with pytest.raises(ConfigError, match="non-empty"):
+        load_config(config_file)
+
+
+def test_second_profile_parsed_with_s3_backend(tmp_path: Path) -> None:
+    config_file = tmp_path / "cameras.yaml"
+    config_file.write_text(VALID_YAML + S3_PROFILE_YAML)
+    cfg = load_config(config_file)
+
+    assert len(cfg.profiles) == 2
+    s3 = cfg.profiles[1]
+    assert s3.name == "m3085v-sd-s3sync"
+    assert s3.target_firmware == "12.11.72"
+    assert s3.applications["sd_to_s3_sync"]["app_package_path"].endswith(".eap")
+    assert s3.motion_detection["size_percentage"] == [5, 5]
+    assert s3.storage.backend == "sd_s3sync"
+    assert s3.storage.smb is None
+    assert s3.storage.sd_s3sync.endpoint == "https://s3.example-provider.com"
+    assert s3.storage.sd_s3sync.bucket == "my-cctv-bucket"
+    assert s3.storage.sd_s3sync.access_key == "AKIA"
+    assert s3.storage.sd_s3sync.secret_key == "SECRET"
+
+
+def test_unknown_storage_backend_rejected(tmp_path: Path) -> None:
+    yaml_content = VALID_YAML.replace("backend: smb", "backend: ftp")
+    config_file = tmp_path / "cameras.yaml"
+    config_file.write_text(yaml_content)
+    with pytest.raises(ConfigError, match="storage.backend"):
+        load_config(config_file)
+
+
+def test_backend_block_must_match_declared_backend(tmp_path: Path) -> None:
+    """backend: sd_s3sync with only an smb block → the sd_s3sync block is required."""
+    yaml_content = VALID_YAML.replace("backend: smb", "backend: sd_s3sync")
+    config_file = tmp_path / "cameras.yaml"
+    config_file.write_text(yaml_content)
+    with pytest.raises(ConfigError, match="storage.sd_s3sync is required"):
+        load_config(config_file)
+
+
+def test_missing_s3_credential_key_rejected(tmp_path: Path) -> None:
+    yaml_content = VALID_YAML + S3_PROFILE_YAML.replace("        secret_key: SECRET\n", "")
+    config_file = tmp_path / "cameras.yaml"
+    config_file.write_text(yaml_content)
+    with pytest.raises(ConfigError, match=r"profiles\[1\]\.storage\.sd_s3sync\.secret_key"):
+        load_config(config_file)
+
+
+def test_profile_missing_match_rejected(tmp_path: Path) -> None:
+    yaml_content = VALID_YAML.replace("    match:\n      models: [M3005, P1204]\n", "")
+    config_file = tmp_path / "cameras.yaml"
+    config_file.write_text(yaml_content)
+    with pytest.raises(ConfigError, match=r"profiles\[0\]\.match"):
+        load_config(config_file)
+
+
+def test_profile_empty_models_rejected(tmp_path: Path) -> None:
+    yaml_content = VALID_YAML.replace("models: [M3005, P1204]", "models: []")
+    config_file = tmp_path / "cameras.yaml"
+    config_file.write_text(yaml_content)
+    with pytest.raises(ConfigError, match="models"):
+        load_config(config_file)
+
+
+# --- Profile matching ---
+
+
+def test_match_profile_substring_matches_full_model_string(tmp_path: Path) -> None:
+    """Discovered models come back as full product names ('AXIS M3085-V Network
+    Camera'), so match.models entries are substrings, not exact values."""
+    config_file = tmp_path / "cameras.yaml"
+    config_file.write_text(VALID_YAML + S3_PROFILE_YAML)
+    cfg = load_config(config_file)
+
+    assert cfg.match_profile("AXIS M3085-V Network Camera").name == "m3085v-sd-s3sync"
+    assert cfg.match_profile("AXIS M3005 Fixed Dome").name == "legacy-smb"
+
+
+def test_match_profile_returns_first_match(tmp_path: Path) -> None:
+    """Overlapping profiles resolve to the first one declared, not the most specific."""
+    overlapping = VALID_YAML.replace("models: [M3005, P1204]", "models: [M30]")
+    config_file = tmp_path / "cameras.yaml"
+    config_file.write_text(overlapping + S3_PROFILE_YAML)
+    cfg = load_config(config_file)
+
+    assert cfg.match_profile("AXIS M3085-V Network Camera").name == "legacy-smb"
+
+
+def test_match_profile_returns_none_when_nothing_matches(tmp_path: Path) -> None:
+    config_file = tmp_path / "cameras.yaml"
+    config_file.write_text(VALID_YAML)
+    cfg = load_config(config_file)
+    assert cfg.match_profile("AXIS Q6135-LE PTZ") is None
+    assert cfg.match_profile("") is None
