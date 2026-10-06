@@ -56,7 +56,7 @@ class Profile:
     e.g. "M3085-V" matches "AXIS M3085-V Network Camera")."""
     name: str
     models: list[str]
-    target_firmware: Optional[str]  # precondition only — cctv never auto-upgrades firmware
+    target_firmware: list[str]  # accepted versions, [] = unchecked; precondition only — cctv never auto-upgrades firmware
     applications: dict[str, dict]  # e.g. {"video_motion_detection": {"app_package_path": "..."}}
     motion_detection: dict  # shape depends on storage.backend (legacy sensitivity vs VMD4 filters)
     storage: StorageConfig
@@ -183,9 +183,16 @@ def _parse_profile(index: int, data: object) -> Profile:
     if not isinstance(models, list) or not models or not all(isinstance(m, str) for m in models):
         raise ConfigError(f"{label}.match.models must be a non-empty list of strings")
 
-    target_firmware = data.get("target_firmware") or None
-    if target_firmware is not None and not isinstance(target_firmware, str):
-        raise ConfigError(f"{label}.target_firmware must be a string or omitted")
+    # One version or a list of accepted versions — a fleet sharing one profile
+    # can sit on more than one verified build (e.g. 5.51.7.4 and 5.51.7.7).
+    target_firmware_raw = data.get("target_firmware") or []
+    if isinstance(target_firmware_raw, str):
+        target_firmware_raw = [target_firmware_raw]
+    if not isinstance(target_firmware_raw, list) or not all(
+        isinstance(v, str) and v for v in target_firmware_raw
+    ):
+        raise ConfigError(f"{label}.target_firmware must be a version string, a list of them, or omitted")
+    target_firmware = list(target_firmware_raw)
 
     applications_raw = data.get("applications") or {}
     if not isinstance(applications_raw, dict):

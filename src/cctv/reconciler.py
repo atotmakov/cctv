@@ -120,10 +120,11 @@ def reconcile(
     if profile.target_firmware:
         fw = vapix.get_params(camera.ip, _FIRMWARE_VERSION, auth, config.timeout)
         current_fw = fw.get(_FIRMWARE_VERSION)
-        if current_fw != profile.target_firmware:
+        if current_fw not in profile.target_firmware:
+            expected = " or ".join(repr(v) for v in profile.target_firmware)
             raise VapixError(
                 f"Firmware mismatch on {camera.ip}: profile '{profile.name}' expects "
-                f"{profile.target_firmware!r}, camera reports {current_fw!r}. cctv does not "
+                f"{expected}, camera reports {current_fw!r}. cctv does not "
                 "auto-upgrade firmware — upgrade manually, then re-run."
             )
 
@@ -481,7 +482,9 @@ def _reconcile_timezone(camera: DiscoveredCamera, config: CameraConfig, auth: HT
 
 def _reconcile_ntp_fallback(camera: DiscoveredCamera, config: CameraConfig, auth: HTTPDigestAuth) -> list[str]:
     current = vapix.get_ntp_fallback_servers(camera.ip, auth, config.timeout)
-    if current == config.ntp_fallback_servers:
+    # None = firmware has no fallback-NTP endpoint (legacy 5.x): nothing to
+    # converge, and failing here would block every later setting on the camera.
+    if current is None or current == config.ntp_fallback_servers:
         return []
     vapix.set_ntp_fallback_servers(camera.ip, auth, config.timeout, config.ntp_fallback_servers)
     return ["ntp_fallback"]

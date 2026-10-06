@@ -417,9 +417,11 @@ def set_remote_syslog(ip: str, auth: HTTPDigestAuth, timeout: int, servers: list
 # directions work.
 # ---------------------------------------------------------------------------
 
-def get_ntp_fallback_servers(ip: str, auth: HTTPDigestAuth, timeout: int) -> list[str]:
+def get_ntp_fallback_servers(ip: str, auth: HTTPDigestAuth, timeout: int) -> Optional[list[str]]:
     """GET the camera's configured NTP fallback server list (used e.g. when
-    DHCP doesn't hand out an NTP source via option 42). Returns [] if none set."""
+    DHCP doesn't hand out an NTP source via option 42). Returns [] if none set,
+    or None if the firmware has no such endpoint (AXIS OS 5.x answers 404 —
+    seen on M3005/P1204 5.51.7.4, 2026-10-06)."""
     url = f"http://{ip}/config/rest/network-time-sync/v1/ntp/client"
     try:
         resp = requests.get(url, auth=auth, timeout=timeout)
@@ -429,6 +431,8 @@ def get_ntp_fallback_servers(ip: str, auth: HTTPDigestAuth, timeout: int) -> lis
         raise VapixError(f"Connection error to {ip}: {e}")
     except requests.exceptions.RequestException as e:
         raise VapixError(f"Request error to {ip}: {e}")
+    if resp.status_code == 404:
+        return None
     if resp.status_code != 200:
         raise VapixError(f"GET NTP fallback servers from {ip} failed: {resp.status_code} {resp.reason}")
     try:

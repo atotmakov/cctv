@@ -14,13 +14,13 @@ from cctv.config import (
 def legacy_profile() -> Profile:
     """AXIS OS 5.x fleet: legacy root.Motion group + SMB network-share recording.
 
-    target_firmware is deliberately None so reconcile() skips the firmware
+    target_firmware is deliberately [] so reconcile() skips the firmware
     precondition read — tests that exercise it set it explicitly.
     """
     return Profile(
         name="legacy-smb",
         models=["P3245-V", "M3005", "P1204", "M2014-E"],
-        target_firmware=None,
+        target_firmware=[],
         applications={},
         motion_detection={
             "enabled": True,
@@ -46,7 +46,7 @@ def s3_profile() -> Profile:
     return Profile(
         name="m3085v-sd-s3sync",
         models=["M3085-V"],
-        target_firmware=None,
+        target_firmware=[],
         applications={"sd_to_s3_sync": {"app_package_path": "/opt/eap/signed_SD_to_S3_Sync_0_9_5_aarch64.eap"}},
         motion_detection={
             "enabled": True,
