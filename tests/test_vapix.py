@@ -829,10 +829,17 @@ def test_get_ntp_fallback_servers_empty_when_none_configured() -> None:
         assert get_ntp_fallback_servers(IP, AUTH, timeout=5) == []
 
 
-def test_get_ntp_fallback_servers_non_2xx_raises() -> None:
+def test_get_ntp_fallback_servers_404_means_unsupported() -> None:
+    """Legacy AXIS OS 5.x has no /config/rest endpoint — 404 → None, not an error."""
     mock_resp = MagicMock(status_code=404, reason="Not Found")
     with patch("cctv.vapix.requests.get", return_value=mock_resp):
-        with pytest.raises(VapixError, match="404"):
+        assert get_ntp_fallback_servers(IP, AUTH, timeout=5) is None
+
+
+def test_get_ntp_fallback_servers_non_2xx_raises() -> None:
+    mock_resp = MagicMock(status_code=500, reason="Internal Server Error")
+    with patch("cctv.vapix.requests.get", return_value=mock_resp):
+        with pytest.raises(VapixError, match="500"):
             get_ntp_fallback_servers(IP, AUTH, timeout=5)
 
 

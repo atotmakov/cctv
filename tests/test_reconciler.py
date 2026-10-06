@@ -1281,7 +1281,7 @@ def test_reconcile_firmware_mismatch_raises_before_any_write(
 ) -> None:
     """target_firmware is a precondition: a mismatch fails the camera before any
     setting is touched, so it is never left partially converged. cctv never upgrades."""
-    legacy_profile.target_firmware = "5.51.7.4"
+    legacy_profile.target_firmware = ["5.51.7.4"]
 
     with patch("cctv.reconciler.vapix.get_params", return_value={_FIRMWARE_VERSION: "5.40.9.2"}), \
          patch("cctv.reconciler.vapix.set_params") as mock_set:
@@ -1297,7 +1297,7 @@ def test_reconcile_firmware_match_proceeds(
     storage_params_response, volatile_hostname_response,
 ) -> None:
     """Firmware matches the profile's precondition → reconciliation continues normally."""
-    legacy_profile.target_firmware = "5.51.7.4"
+    legacy_profile.target_firmware = ["5.51.7.4"]
 
     with patch("cctv.reconciler.vapix.get_params") as mock_get, \
          patch("cctv.reconciler.vapix.set_params") as mock_set:
@@ -1310,6 +1310,33 @@ def test_reconcile_firmware_match_proceeds(
 
     assert result.status == CameraStatus.NO_CHANGE
     mock_set.assert_not_called()
+
+
+def test_reconcile_firmware_any_listed_version_proceeds(
+    camera_config, legacy_profile, mock_auth, smb_params_response, motion_params_response,
+    storage_params_response, volatile_hostname_response,
+) -> None:
+    """A camera on any of the profile's accepted versions passes (.62 on 5.51.7.7)."""
+    legacy_profile.target_firmware = ["5.51.7.4", "5.51.7.7"]
+
+    with patch("cctv.reconciler.vapix.get_params") as mock_get, \
+         patch("cctv.reconciler.vapix.set_params"):
+        mock_get.side_effect = [
+            {_FIRMWARE_VERSION: "5.51.7.7"},
+            smb_params_response, motion_params_response,
+            storage_params_response, volatile_hostname_response,
+        ]
+        result = reconcile(CAM, camera_config, mock_auth)
+
+    assert result.status == CameraStatus.NO_CHANGE
+
+
+def test_reconcile_firmware_mismatch_lists_every_accepted_version(camera_config, legacy_profile, mock_auth) -> None:
+    legacy_profile.target_firmware = ["5.51.7.4", "5.51.7.7"]
+
+    with patch("cctv.reconciler.vapix.get_params", return_value={_FIRMWARE_VERSION: "5.40.9.2"}):
+        with pytest.raises(VapixError, match=r"expects '5\.51\.7\.4' or '5\.51\.7\.7', camera reports '5\.40\.9\.2'"):
+            reconcile(CAM, camera_config, mock_auth)
 
 
 def test_reconcile_firmware_not_read_when_precondition_absent(
@@ -1361,6 +1388,24 @@ def test_reconcile_ntp_fallback_no_change_when_matches(
     with patch("cctv.reconciler.vapix.get_params") as mock_get, \
          patch("cctv.reconciler.vapix.set_params"), \
          patch("cctv.reconciler.vapix.get_ntp_fallback_servers", return_value=["pool.ntp.org", "ntp1.vniiftri.ru"]), \
+         patch("cctv.reconciler.vapix.set_ntp_fallback_servers") as mock_set_ntp:
+        mock_get.side_effect = [smb_params_response, motion_params_response, storage_params_response, volatile_hostname_response]
+        result = reconcile(CAM, camera_config, mock_auth)
+
+    assert "ntp_fallback" not in result.settings_changed
+    mock_set_ntp.assert_not_called()
+
+
+def test_reconcile_ntp_fallback_skipped_when_firmware_lacks_endpoint(
+    camera_config, mock_auth, smb_params_response, motion_params_response,
+    storage_params_response, volatile_hostname_response,
+) -> None:
+    """Legacy 5.x answers 404 (get returns None) → no write, camera still converges."""
+    camera_config.ntp_fallback_servers = ["pool.ntp.org"]
+
+    with patch("cctv.reconciler.vapix.get_params") as mock_get, \
+         patch("cctv.reconciler.vapix.set_params"), \
+         patch("cctv.reconciler.vapix.get_ntp_fallback_servers", return_value=None), \
          patch("cctv.reconciler.vapix.set_ntp_fallback_servers") as mock_set_ntp:
         mock_get.side_effect = [smb_params_response, motion_params_response, storage_params_response, volatile_hostname_response]
         result = reconcile(CAM, camera_config, mock_auth)

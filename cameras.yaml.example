@@ -35,11 +35,12 @@ profiles:
     match:
       models: [M3005, P1204, M2014-E]
 
-    target_firmware: "5.51.7.4"
+    target_firmware: ["5.51.7.4", "5.51.7.7"]
       # Precondition checked FIRST, before anything else in this profile — a
       # mismatch fails that camera immediately with no settings applied.
       # cctv never upgrades firmware itself; omit (or set to null) to skip
-      # this check entirely for a profile.
+      # this check entirely for a profile. A single version string also works;
+      # a list accepts a camera on any of its versions.
 
     applications:
       video_motion_detection:

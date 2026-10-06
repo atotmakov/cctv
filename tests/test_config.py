@@ -68,7 +68,7 @@ def test_load_valid_config(tmp_path: Path) -> None:
     profile = cfg.profiles[0]
     assert profile.name == "legacy-smb"
     assert profile.models == ["M3005", "P1204"]
-    assert profile.target_firmware is None
+    assert profile.target_firmware == []
     assert profile.applications == {}
     assert profile.motion_detection["enabled"] is True
     assert profile.motion_detection["sensitivity"] == 50
@@ -248,7 +248,7 @@ def test_second_profile_parsed_with_s3_backend(tmp_path: Path) -> None:
     assert len(cfg.profiles) == 2
     s3 = cfg.profiles[1]
     assert s3.name == "m3085v-sd-s3sync"
-    assert s3.target_firmware == "12.11.72"
+    assert s3.target_firmware == ["12.11.72"]
     assert s3.applications["sd_to_s3_sync"]["app_package_path"].endswith(".eap")
     assert s3.motion_detection["size_percentage"] == [5, 5]
     assert s3.storage.backend == "sd_s3sync"
@@ -374,3 +374,31 @@ def test_syslog_explicit_values(tmp_path: Path) -> None:
 def test_syslog_invalid(tmp_path: Path, block: str, match: str) -> None:
     with pytest.raises(ConfigError, match=match):
         _load_with_syslog(tmp_path, block)
+
+
+# ---------------------------------------------------------------------------
+# target_firmware: one version or a list
+# ---------------------------------------------------------------------------
+
+
+def _load_with_firmware(tmp_path: Path, value: str) -> CameraConfig:
+    text = VALID_YAML.replace("  - name: legacy-smb\n", f"  - name: legacy-smb\n    target_firmware: {value}\n", 1)
+    config_file = tmp_path / "cameras.yaml"
+    config_file.write_text(text)
+    return load_config(config_file)
+
+
+def test_target_firmware_list(tmp_path: Path) -> None:
+    cfg = _load_with_firmware(tmp_path, '["5.51.7.4", "5.51.7.7"]')
+    assert cfg.profiles[0].target_firmware == ["5.51.7.4", "5.51.7.7"]
+
+
+def test_target_firmware_single_string_becomes_list(tmp_path: Path) -> None:
+    assert _load_with_firmware(tmp_path, '"5.51.7.4"').profiles[0].target_firmware == ["5.51.7.4"]
+
+
+@pytest.mark.parametrize("value", ["5.51", "[5.51, 5.52]", '["5.51.7.4", ""]', "{a: 1}"])
+def test_target_firmware_invalid(tmp_path: Path, value: str) -> None:
+    # Unquoted 5.51 parses as a float — versions must be strings.
+    with pytest.raises(ConfigError, match="target_firmware"):
+        _load_with_firmware(tmp_path, value)
