@@ -17,6 +17,14 @@ timezone: CET-1CEST,M3.5.0,M10.5.0/3  # POSIX timezone string — omit to leave 
 recording_retention_days: 33  # 0 = unlimited; maps to S0.CleanupMaxAge (SD) or S1.CleanupMaxAge
                                # (NetworkShare) depending on each camera's matched profile.storage.backend
 
+# Remote syslog (UDP, BSD/RFC3164 format) — omit to leave camera syslog config unchanged.
+# Legacy AXIS OS 5.x cameras REBOOT automatically when this changes (~80 s without
+# recording), since their syslog daemon only rereads its config on restart.
+# syslog:
+#   host: 192.168.1.100
+#   port: 514        # default; legacy 5.x cameras support only 514
+#   severity: info   # minimum level forwarded: debug|info|notice|warning|error|critical (default: info)
+
 # --- profiles: each camera is routed to the first profile whose match.models
 # contains a substring of its reported model name. A camera matching no
 # profile is reported as a failure, not silently skipped. ---

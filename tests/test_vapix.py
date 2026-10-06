@@ -943,3 +943,129 @@ def test_get_network_shares_timeout_raises() -> None:
     with patch("cctv.vapix.requests.get", side_effect=req_lib.exceptions.Timeout):
         with pytest.raises(VapixError, match="timeout"):
             get_network_shares(IP, AUTH, timeout=5)
+
+
+# ---------------------------------------------------------------------------
+# restart / editcgi file access / remotesyslog.cgi
+# ---------------------------------------------------------------------------
+
+from cctv.vapix import (  # noqa: E402
+    restart_camera,
+    read_camera_file,
+    write_camera_file,
+    get_remote_syslog,
+    set_remote_syslog,
+)
+
+EDITCGI_PAGE = (
+    "<html><body>\nFile: /etc/syslog.conf  Length: 40 bytes\n<form method=\"POST\">\n"
+    "<tr><td colspan=3><textarea rows=20 cols=80 name=content>\n"
+    "*.err\t|/var/log/crit_log_pipe\nkern.* &amp; &lt;x&gt;\n</textarea>\n</form></body></html>"
+)
+
+
+def test_restart_camera_calls_restart_cgi() -> None:
+    with patch("cctv.vapix.requests.get", return_value=MagicMock(status_code=200)) as mock_get:
+        restart_camera(IP, AUTH, timeout=5)
+    mock_get.assert_called_once_with(f"http://{IP}/axis-cgi/restart.cgi", auth=AUTH, timeout=5)
+
+
+def test_restart_camera_non_2xx_raises() -> None:
+    with patch("cctv.vapix.requests.get", return_value=MagicMock(status_code=401, reason="Unauthorized")):
+        with pytest.raises(VapixError, match="401"):
+            restart_camera(IP, AUTH, timeout=5)
+
+
+def test_read_camera_file_extracts_and_unescapes_textarea() -> None:
+    with patch("cctv.vapix.requests.get", return_value=MagicMock(status_code=200, text=EDITCGI_PAGE)) as mock_get:
+        content = read_camera_file(IP, AUTH, 5, "/etc/syslog.conf")
+    assert content == "*.err\t|/var/log/crit_log_pipe\nkern.* & <x>\n"
+    mock_get.assert_called_once_with(
+        f"http://{IP}/admin-bin/editcgi.cgi", params={"file": "/etc/syslog.conf"}, auth=AUTH, timeout=5,
+    )
+
+
+def test_read_camera_file_missing_file_raises() -> None:
+    page = "<html><body>\nFailed to get status of /etc/nope\n</body></html>"
+    with patch("cctv.vapix.requests.get", return_value=MagicMock(status_code=200, text=page)):
+        with pytest.raises(VapixError, match="Failed to get status"):
+            read_camera_file(IP, AUTH, 5, "/etc/nope")
+
+
+def test_write_camera_file_posts_content() -> None:
+    resp = MagicMock(status_code=200, text="File: /etc/syslog.conf Length: 3 bytes <br> Wrote 3 bytes")
+    with patch("cctv.vapix.requests.post", return_value=resp) as mock_post:
+        write_camera_file(IP, AUTH, 5, "/etc/syslog.conf", "abc")
+    mock_post.assert_called_once_with(
+        f"http://{IP}/admin-bin/editcgi.cgi",
+        data={"save_file": "/etc/syslog.conf", "mode": "0100644", "convert_crlf_to_lf": "on", "content": "abc"},
+        auth=AUTH,
+        timeout=5,
+    )
+
+
+def test_write_camera_file_without_confirmation_raises() -> None:
+    resp = MagicMock(status_code=200, text="<html>Permission denied</html>")
+    with patch("cctv.vapix.requests.post", return_value=resp):
+        with pytest.raises(VapixError, match="Permission denied"):
+            write_camera_file(IP, AUTH, 5, "/etc/syslog.conf", "abc")
+
+
+def test_get_remote_syslog_returns_data() -> None:
+    resp = MagicMock(status_code=200)
+    resp.json.return_value = {"apiVersion": "1.2", "method": "status", "data": {"enabled": False, "servers": []}}
+    with patch("cctv.vapix.requests.post", return_value=resp) as mock_post:
+        assert get_remote_syslog(IP, AUTH, 5) == {"enabled": False, "servers": []}
+    mock_post.assert_called_once_with(
+        f"http://{IP}/axis-cgi/remotesyslog.cgi",
+        json={"apiVersion": "1.2", "method": "status"},
+        auth=AUTH,
+        timeout=5,
+    )
+
+
+def test_set_remote_syslog_sends_setup() -> None:
+    resp = MagicMock(status_code=200)
+    resp.json.return_value = {"apiVersion": "1.2", "method": "setup", "data": {"enabled": True}}
+    server = {"address": "192.168.1.100", "port": 514}
+    with patch("cctv.vapix.requests.post", return_value=resp) as mock_post:
+        set_remote_syslog(IP, AUTH, 5, servers=[server])
+    assert mock_post.call_args.kwargs["json"] == {
+        "apiVersion": "1.2", "method": "setup", "params": {"servers": [server]},
+    }
+
+
+def test_remote_syslog_error_payload_raises() -> None:
+    resp = MagicMock(status_code=200)
+    resp.json.return_value = {"apiVersion": "1.2", "error": {"code": 2103, "message": "Required parameter missing"}}
+    with patch("cctv.vapix.requests.post", return_value=resp):
+        with pytest.raises(VapixError, match="Required parameter missing"):
+            set_remote_syslog(IP, AUTH, 5, servers=[])
+
+
+def test_remote_syslog_non_2xx_raises() -> None:
+    with patch("cctv.vapix.requests.post", return_value=MagicMock(status_code=404, reason="Not Found")):
+        with pytest.raises(VapixError, match="404"):
+            get_remote_syslog(IP, AUTH, 5)
+
+
+@pytest.mark.parametrize("body", [["not", "a", "dict"], None, {"data": ["x"]}])
+def test_remote_syslog_unexpected_json_shape_raises(body) -> None:
+    resp = MagicMock(status_code=200)
+    resp.json.return_value = body
+    with patch("cctv.vapix.requests.post", return_value=resp):
+        with pytest.raises(VapixError, match="unexpected"):
+            get_remote_syslog(IP, AUTH, 5)
+
+
+def test_read_camera_file_accepts_quoted_textarea_name() -> None:
+    page = '<textarea rows=20 name="content">\nline\n</textarea>'
+    with patch("cctv.vapix.requests.get", return_value=MagicMock(status_code=200, text=page)):
+        assert read_camera_file(IP, AUTH, 5, "/etc/syslog.conf") == "line\n"
+
+
+def test_write_camera_file_short_write_raises() -> None:
+    resp = MagicMock(status_code=200, text="Wrote 2 bytes")
+    with patch("cctv.vapix.requests.post", return_value=resp):
+        with pytest.raises(VapixError, match="wrote 2 of 3 bytes"):
+            write_camera_file(IP, AUTH, 5, "/etc/syslog.conf", "abc")

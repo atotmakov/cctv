@@ -7,7 +7,7 @@ from typing import Optional
 
 from requests.auth import HTTPDigestAuth
 
-from cctv.config import CameraConfig, Profile, S3StorageConfig
+from cctv.config import CameraConfig, Profile, S3StorageConfig, SyslogConfig
 from cctv.scanner import DiscoveredCamera
 from cctv import vapix
 from cctv.vapix import VapixError
@@ -43,6 +43,20 @@ _FIRMWARE_VERSION = "root.Properties.Firmware.Version"
 
 _SDS3SYNC_GROUP = "root.Sds3sync"
 _SDS3SYNC_APP_NAME = "sds3sync"
+
+# Remote syslog. Legacy fleet: one managed forwarding line in sysklogd's
+# config, preceded by a marker comment. sysklogd 1.4.1 syntax has no port
+# field — "@host" always means UDP 514.
+_SYSLOG_CONF_PATH = "/etc/syslog.conf"
+_SYSLOG_MARKER = "# cctv: remote syslog"
+_SYSLOG_LEGACY_PORT = 514
+_SYSLOG_LEGACY_SELECTOR = {"error": "err", "critical": "crit"}  # others are spelled the same
+_SYSLOG_REBOOTED_LABEL = "syslog (camera rebooted)"
+# AXIS OS 12 remotesyslog.cgi severity spelling (developer.axis.com remote syslog API)
+_SYSLOG_API_SEVERITY = {
+    "debug": "Debug", "info": "Informational", "notice": "Notice",
+    "warning": "Warning", "error": "Error", "critical": "Critical",
+}
 
 _FULL_FRAME = {"Left": "0", "Right": "9999", "Top": "0", "Bottom": "9999"}
 
@@ -113,6 +127,12 @@ def reconcile(
                 "auto-upgrade firmware — upgrade manually, then re-run."
             )
 
+    if config.syslog and profile.storage.backend == "smb" and config.syslog.port != _SYSLOG_LEGACY_PORT:
+        raise VapixError(
+            f"syslog.port {config.syslog.port} not supported on {camera.ip}: legacy firmware "
+            f"(sysklogd 1.4.1) can only forward to UDP port {_SYSLOG_LEGACY_PORT}"
+        )
+
     changed: list[str] = []
 
     if profile.storage.backend == "smb":
@@ -129,6 +149,23 @@ def reconcile(
         changed += _reconcile_ntp_fallback(camera, config, auth)
 
     changed += _reconcile_hostname_sync(camera, config, auth)
+
+    if config.syslog:
+        if profile.storage.backend == "smb":
+            # Must stay the LAST step: the reboot cuts off any later VAPIX call.
+            if _ensure_legacy_syslog_conf(camera.ip, auth, config.timeout, config.syslog):
+                try:
+                    vapix.restart_camera(camera.ip, auth, config.timeout)
+                except VapixError as e:
+                    # The file now matches, so a re-run would see nothing to do and
+                    # never reboot — the operator has to finish this one by hand.
+                    raise VapixError(
+                        f"{_SYSLOG_CONF_PATH} updated on {camera.ip} but restart failed ({e}) — "
+                        "reboot the camera manually for syslog forwarding to take effect"
+                    )
+                changed.append(_SYSLOG_REBOOTED_LABEL)
+        elif _ensure_remote_syslog_api(camera.ip, auth, config.timeout, config.syslog):
+            changed.append("syslog")
 
     status = CameraStatus.APPLIED if changed else CameraStatus.NO_CHANGE
     return CameraResult(
@@ -464,6 +501,112 @@ def _reconcile_hostname_sync(camera: DiscoveredCamera, config: CameraConfig, aut
         vapix.set_params(camera.ip, {_NETWORK_HOSTNAME: volatile_hostname}, auth, config.timeout)
         return ["hostname"]
     return []
+
+
+# ---------------------------------------------------------------------------
+# Remote syslog
+# ---------------------------------------------------------------------------
+
+def legacy_syslog_line(syslog: SyslogConfig) -> str:
+    selector = _SYSLOG_LEGACY_SELECTOR.get(syslog.severity, syslog.severity)
+    return f"*.{selector};authpriv.none\t\t\t\t\t@{syslog.host}"
+
+
+def _forward_target(line: str) -> Optional[str]:
+    """The "@host" action of a sysklogd forwarding rule, or None for any other line."""
+    fields = line.split()
+    if fields and not line.lstrip().startswith("#") and fields[-1].startswith("@"):
+        return fields[-1]
+    return None
+
+
+def render_legacy_syslog_conf(current: str, syslog: SyslogConfig) -> Optional[str]:
+    """Return the new syslog.conf text, or None if it already forwards as desired.
+
+    The managed line is the forwarding rule right after the marker comment;
+    failing that, any rule already targeting @host (a hand-added line) is
+    adopted and marked. Every other line is preserved verbatim.
+    """
+    desired = legacy_syslog_line(syslog)
+    lines = current.split("\n")
+    if any(line.split() == desired.split() for line in lines):
+        return None
+
+    for i, line in enumerate(lines):
+        if line.strip() == _SYSLOG_MARKER:
+            if i + 1 < len(lines) and _forward_target(lines[i + 1]):
+                lines[i + 1] = desired
+            else:
+                # Marker without its rule (deleted by hand, or marker last in
+                # the file) — never overwrite whatever unrelated line follows.
+                lines.insert(i + 1, desired)
+            return "\n".join(lines)
+
+    for i, line in enumerate(lines):
+        if _forward_target(line) == f"@{syslog.host}":
+            lines[i:i + 1] = [_SYSLOG_MARKER, desired]
+            return "\n".join(lines)
+
+    return current.rstrip("\n") + f"\n\n{_SYSLOG_MARKER}\n{desired}\n"
+
+
+def _ensure_legacy_syslog_conf(ip: str, auth: HTTPDigestAuth, timeout: int, syslog: SyslogConfig) -> bool:
+    """Write the managed forwarding line if needed. Returns True when written —
+    the caller must then reboot, since sysklogd only rereads on restart."""
+    current = vapix.read_camera_file(ip, auth, timeout, _SYSLOG_CONF_PATH)
+    new = render_legacy_syslog_conf(current, syslog)
+    if new is None:
+        return False
+    try:
+        vapix.write_camera_file(ip, auth, timeout, _SYSLOG_CONF_PATH, new)
+    except VapixError as e:
+        # An interrupted POST may still have saved the file; if it did, a re-run
+        # sees nothing to do and never reboots.
+        raise VapixError(
+            f"{_SYSLOG_CONF_PATH} write on {ip} failed ({e}) — the file may still have "
+            "changed; if so, reboot the camera manually for syslog forwarding to take effect"
+        )
+    return True
+
+
+def remote_syslog_server(syslog: SyslogConfig) -> dict:
+    """Server entry for remotesyslog.cgi `setup`, per the Axis remote syslog API docs."""
+    return {
+        "address": syslog.host,
+        "port": syslog.port,
+        "protocol": "UDP",
+        "syslogFormat": "RFC3164",
+        "severity": _SYSLOG_API_SEVERITY[syslog.severity],
+        "type": "All",  # documented values Audit|All — never risk forwarding audit logs only
+    }
+
+
+def _server_matches(current: object, desired: dict) -> bool:
+    # Compare only the fields we manage — the camera may report extra keys —
+    # and loosely: the `setup` readback (type and case of values) is not yet
+    # verified on hardware, and a strict compare would reconfigure every run.
+    if not isinstance(current, dict):
+        return False
+    for key, value in desired.items():
+        if key not in current:
+            if key == "type":
+                continue  # optional, and absent from the documented status example
+            return False
+        if str(current[key]).lower() != str(value).lower():
+            return False
+    return True
+
+
+def _ensure_remote_syslog_api(ip: str, auth: HTTPDigestAuth, timeout: int, syslog: SyslogConfig) -> bool:
+    desired = remote_syslog_server(syslog)
+    current = vapix.get_remote_syslog(ip, auth, timeout)
+    servers = current.get("servers") or []
+    if not isinstance(servers, list):
+        raise VapixError(f"remotesyslog.cgi status on {ip}: unexpected servers {str(servers)[:200]}")
+    if current.get("enabled") is True and len(servers) == 1 and _server_matches(servers[0], desired):
+        return False
+    vapix.set_remote_syslog(ip, auth, timeout, servers=[desired])
+    return True
 
 
 # ---------------------------------------------------------------------------

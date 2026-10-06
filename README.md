@@ -79,6 +79,7 @@ timeout: 5
 | `motion_detection.post_trigger_time` | Seconds to record after motion event (default: 5) |
 | `recording_retention_days` | Days to keep recordings on the share (default: 33) |
 | `timezone` | POSIX timezone string — cameras use this as the SMB folder timestamp and display time. NTP server is obtained from DHCP. Omit to leave unchanged. |
+| `syslog.host` / `syslog.port` / `syslog.severity` | Remote syslog target (UDP, BSD format; port default 514, severity default `info`). Omit to leave unchanged. **Legacy AXIS OS 5.x cameras reboot automatically when this changes** — the output shows `syslog (camera rebooted)`. Legacy cameras support only port 514. |
 
 ### SMB folder naming
 
