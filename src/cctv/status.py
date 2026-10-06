@@ -43,6 +43,9 @@ _LEGACY_VMD_APP_NAME = "VideoMotionDetection"
 _BUILTIN_MOTION_TOPIC = "tns1:VideoAnalytics/tnsaxis:MotionDetection"
 _LEGACY_VMD_APP_MOTION_TOPIC = "tns1:RuleEngine/tnsaxis:VideoMotionDetection/motion"
 
+_SYSLOG_CONF_PATH = "/etc/syslog.conf"
+_SYSLOG_LEGACY_PORT = 514  # sysklogd 1.4.1 "@host" always means UDP 514
+
 
 def _classify_motion_topic(topic: str) -> Optional[str]:
     """Label which event source an action rule's topic actually points at —
@@ -80,6 +83,13 @@ class ActionRuleStatus:
 
 
 @dataclass
+class SyslogTarget:
+    host: str
+    port: int
+    detail: str  # sysklogd selector (legacy) or "UDP RFC3164 Informational" (API)
+
+
+@dataclass
 class CameraStatusResult:
     ip: str
     model: Optional[str]
@@ -103,7 +113,47 @@ class CameraStatusResult:
     smb_username: Optional[str] = None
     timezone: Optional[str] = None
     retention_days: Optional[str] = None
+    # Remote syslog as the camera itself reports it — via remotesyslog.cgi on
+    # AXIS OS 12, or the "@host" rules in /etc/syslog.conf on legacy 5.x.
+    syslog_source: Optional[str] = None  # "remote syslog API" / "syslog.conf"
+    syslog_enabled: bool = False
+    syslog_targets: list[SyslogTarget] = field(default_factory=list)
+    syslog_expected_host: Optional[str] = None  # cameras.yaml syslog.host, if configured
+    syslog_error: Optional[str] = None  # syslog unreadable — rest of the status still valid
     error: Optional[str] = None
+
+
+def parse_syslog_conf_targets(content: str) -> list[SyslogTarget]:
+    """The "@host" forwarding rules of a sysklogd config, in file order."""
+    targets = []
+    for line in content.splitlines():
+        fields = line.split()
+        if len(fields) >= 2 and not line.lstrip().startswith("#") and fields[-1].startswith("@"):
+            targets.append(SyslogTarget(host=fields[-1][1:], port=_SYSLOG_LEGACY_PORT, detail=fields[0]))
+    return targets
+
+
+def _collect_syslog(ip: str, auth: HTTPDigestAuth, timeout: int) -> tuple[Optional[str], bool, list[SyslogTarget]]:
+    """Read remote syslog state — the API where the firmware has it (AXIS OS
+    12), else the legacy config file (5.x, where remotesyslog.cgi is a 404).
+    Raises VapixError only if neither source is readable."""
+    try:
+        data = vapix.get_remote_syslog(ip, auth, timeout)
+    except vapix.VapixError:
+        content = vapix.read_camera_file(ip, auth, timeout, _SYSLOG_CONF_PATH)
+        targets = parse_syslog_conf_targets(content)
+        return "syslog.conf", bool(targets), targets
+
+    servers = data.get("servers") or []
+    targets = [
+        SyslogTarget(
+            host=str(s.get("address", "?")),
+            port=int(s.get("port") or 0),
+            detail=" ".join(str(s[k]) for k in ("protocol", "syslogFormat", "severity") if s.get(k)),
+        )
+        for s in servers if isinstance(s, dict)
+    ]
+    return "remote syslog API", data.get("enabled") is True, targets
 
 
 def collect_status(
@@ -247,6 +297,15 @@ def collect_status(
     storage = vapix.get_params(camera.ip, _STORAGE_GROUP, auth, config.timeout)
     time = vapix.get_params(camera.ip, _TIME_GROUP, auth, config.timeout)
 
+    syslog_source: Optional[str] = None
+    syslog_enabled = False
+    syslog_targets: list[SyslogTarget] = []
+    syslog_error: Optional[str] = None
+    try:
+        syslog_source, syslog_enabled, syslog_targets = _collect_syslog(camera.ip, auth, config.timeout)
+    except vapix.VapixError as e:
+        syslog_error = str(e)
+
     # There is no independently readable "enabled" flag on legacy VAPIX (see
     # reconciler.py's D3 note: config.motion_enabled is never written via
     # param.cgi) — a full-frame window's presence is the only observable proxy
@@ -270,6 +329,11 @@ def collect_status(
         smb_username=smb_username,
         timezone=time.get(_TIME_TIMEZONE),
         retention_days=storage.get(_STORAGE_RETENTION),
+        syslog_source=syslog_source,
+        syslog_enabled=syslog_enabled,
+        syslog_targets=syslog_targets,
+        syslog_expected_host=config.syslog.host if config.syslog else None,
+        syslog_error=syslog_error,
     )
 
 

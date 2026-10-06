@@ -44,6 +44,25 @@ def print_apply_results(results: list[CameraResult]) -> int:
     return 1 if n_failed > 0 else 0
 
 
+def _print_syslog(result: CameraStatusResult) -> None:
+    if result.syslog_error is not None:
+        print(f"  syslog:       unavailable — {result.syslog_error}")
+        return
+    if result.syslog_source is None:
+        return  # syslog state was never collected for this result
+    targets = ", ".join(f"{t.host}:{t.port} {t.detail}".rstrip() for t in result.syslog_targets)
+    if result.syslog_enabled and targets:
+        print(f"  syslog:       {targets} [{result.syslog_source}]")
+    elif targets:
+        print(f"  syslog:       disabled (configured: {targets}) [{result.syslog_source}]")
+    else:
+        print(f"  syslog:       not forwarding [{result.syslog_source}]")
+
+    expected = result.syslog_expected_host
+    if expected and not (result.syslog_enabled and any(t.host == expected for t in result.syslog_targets)):
+        print(f"  syslog:       NOT forwarding to {expected} from cameras.yaml — run `cctv apply`")
+
+
 def print_camera_status(results: list[CameraStatusResult]) -> int:
     """Print one multi-line block per camera to stdout. Returns exit code (0 or 1)."""
     if not results:
@@ -92,6 +111,7 @@ def print_camera_status(results: list[CameraStatusResult]) -> int:
         print(f"  smb share:    {result.smb_ip}:{result.smb_share}  (user: {result.smb_username})")
         print(f"  time:         {result.timezone}")
         print(f"  retention:    {result.retention_days} days")
+        _print_syslog(result)
         print()
 
     n_failed = sum(1 for r in results if r.error is not None)
