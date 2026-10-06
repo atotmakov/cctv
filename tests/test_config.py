@@ -330,3 +330,47 @@ def test_match_profile_returns_none_when_nothing_matches(tmp_path: Path) -> None
     cfg = load_config(config_file)
     assert cfg.match_profile("AXIS Q6135-LE PTZ") is None
     assert cfg.match_profile("") is None
+
+
+# ---------------------------------------------------------------------------
+# syslog
+# ---------------------------------------------------------------------------
+
+
+def _load_with_syslog(tmp_path: Path, block: str) -> CameraConfig:
+    config_file = tmp_path / "cameras.yaml"
+    config_file.write_text(VALID_YAML + block)
+    return load_config(config_file)
+
+
+def test_syslog_omitted_is_none(tmp_path: Path) -> None:
+    assert _load_with_syslog(tmp_path, "").syslog is None
+
+
+def test_syslog_defaults(tmp_path: Path) -> None:
+    cfg = _load_with_syslog(tmp_path, "syslog:\n  host: 192.168.1.100\n")
+    assert cfg.syslog is not None
+    assert (cfg.syslog.host, cfg.syslog.port, cfg.syslog.severity) == ("192.168.1.100", 514, "info")
+
+
+def test_syslog_explicit_values(tmp_path: Path) -> None:
+    cfg = _load_with_syslog(tmp_path, "syslog:\n  host: nas.lan\n  port: 1514\n  severity: warning\n")
+    assert (cfg.syslog.host, cfg.syslog.port, cfg.syslog.severity) == ("nas.lan", 1514, "warning")
+
+
+@pytest.mark.parametrize("block, match", [
+    ("syslog: 192.168.1.100\n", "'syslog' must be a YAML mapping"),
+    ("syslog:\n  port: 514\n", "syslog.host"),
+    ("syslog:\n  host: ''\n", "syslog.host"),
+    ("syslog:\n  host: 'nas lan'\n", "syslog.host"),
+    ("syslog:\n  host: 'nas.lan:514'\n", "syslog.host"),
+    ("syslog:\n  host: '@nas'\n", "syslog.host"),
+    ("syslog:\n  host: \"nas\\n*.* |/tmp/pipe\"\n", "syslog.host"),
+    ("syslog:\n  host: nas\n  port: 0\n", "syslog.port"),
+    ("syslog:\n  host: nas\n  port: 70000\n", "syslog.port"),
+    ("syslog:\n  host: nas\n  port: '514'\n", "syslog.port"),
+    ("syslog:\n  host: nas\n  severity: verbose\n", "syslog.severity"),
+])
+def test_syslog_invalid(tmp_path: Path, block: str, match: str) -> None:
+    with pytest.raises(ConfigError, match=match):
+        _load_with_syslog(tmp_path, block)

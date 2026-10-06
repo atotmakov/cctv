@@ -108,3 +108,9 @@
 - `status.py` re-declares the same literal VAPIX group/param strings as `reconciler.py` (`_SMB_GROUP`, `_MOTION_GROUP`, etc.) rather than sharing them — deliberate per this story's Dev Notes, but if a third read-only consumer of these constants appears, promoting them to a small shared module becomes worth revisiting
 - No test asserts the exact multi-line block formatting is stable/parseable beyond substring checks — acceptable for a human-readable report, but Story 4.2 (JSON output) is where a stable, tested schema actually matters
 - `cctv status`'s exit-code contract (0/1/2, mirroring `apply` rather than `list`) is a design decision made in this story's Dev Notes rather than a pre-existing epics.md AC — confirm it still feels right once `--json` (Story 4.2) output consumers exist
+
+## From spec-syslog-remote-forwarding (2026-10-06)
+
+- Legacy syslog.conf: when `syslog.host` changes and the old forwarding line was hand-added without the `# cctv: remote syslog` marker (e.g. 192.168.1.60 today), the old `@oldhost` line is left in place and the camera forwards to both hosts. Fix would need to adopt/mark the identical hand line on first run, which costs a write + reboot.
+- executor.py: any VapixError raised late in `reconcile()` (e.g. syslog step) discards the `settings_changed` already applied earlier in that run, so the FAILED line under-reports what was changed. Pre-existing behaviour, not syslog-specific.
+- Legacy syslog.conf, rare hand-edit combos (review loop 2): (a) a marker-managed line to old host A plus an exact hand-added desired line for B -> early no-change return leaves A forwarding; (a') marker line rewritten to B while an unmarked B line at another severity survives -> B receives messages twice. Same root cause as the stale-line item above: unmarked forwarding lines are never reconciled.

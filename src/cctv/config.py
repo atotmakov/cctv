@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import ipaddress
+import re
 from dataclasses import dataclass, field
 from pathlib import Path
 from typing import Optional
@@ -36,6 +37,18 @@ class StorageConfig:
     sd_s3sync: Optional[S3StorageConfig] = None
 
 
+SYSLOG_SEVERITIES = ("debug", "info", "notice", "warning", "error", "critical")
+_SYSLOG_HOST = re.compile(r"[A-Za-z0-9]([A-Za-z0-9.-]{0,251}[A-Za-z0-9])?")
+
+
+@dataclass
+class SyslogConfig:
+    """Remote syslog target — UDP, BSD/RFC3164 format, applied to every camera."""
+    host: str
+    port: int = 514
+    severity: str = "info"  # minimum severity forwarded, one of SYSLOG_SEVERITIES
+
+
 @dataclass
 class Profile:
     """One camera family's desired state — selected per-camera by matching
@@ -59,6 +72,7 @@ class CameraConfig:
     timezone: Optional[str] = None  # POSIX timezone string, e.g. "CET-1CEST,M3.5.0,M10.5.0/3"
     recording_retention_days: int = 33
     profiles: list[Profile] = field(default_factory=list)
+    syslog: Optional[SyslogConfig] = None  # None = leave camera syslog config untouched
 
     def match_profile(self, model: str) -> Optional[Profile]:
         """Return the first profile whose `models` list matches this camera's
@@ -121,7 +135,32 @@ def load_config(path: Path) -> CameraConfig:
         timezone=data.get("timezone") or None,
         recording_retention_days=int(_rr) if (_rr := data.get("recording_retention_days")) is not None else 33,
         profiles=profiles,
+        syslog=_parse_syslog(data.get("syslog")),
     )
+
+
+def _parse_syslog(data: object) -> Optional[SyslogConfig]:
+    if data is None:
+        return None
+    if not isinstance(data, dict):
+        raise ConfigError("'syslog' must be a YAML mapping")
+    host = data.get("host")
+    if not isinstance(host, str) or not host:
+        raise ConfigError("Missing required key: syslog.host (non-empty string)")
+    # Written verbatim into the legacy cameras' /etc/syslog.conf, so anything
+    # beyond a plain hostname/IPv4 (spaces, '#', ':', newlines) could break or
+    # inject sysklogd rules.
+    if not _SYSLOG_HOST.fullmatch(host):
+        raise ConfigError(f"syslog.host must be a hostname or IPv4 address, got {host!r}")
+    port = data.get("port", 514)
+    if isinstance(port, bool) or not isinstance(port, int) or not 1 <= port <= 65535:
+        raise ConfigError(f"syslog.port must be an integer 1-65535, got {port!r}")
+    severity = data.get("severity", "info")
+    if severity not in SYSLOG_SEVERITIES:
+        raise ConfigError(
+            f"syslog.severity must be one of {', '.join(SYSLOG_SEVERITIES)}, got {severity!r}"
+        )
+    return SyslogConfig(host=host, port=port, severity=severity)
 
 
 def _parse_profile(index: int, data: object) -> Profile:

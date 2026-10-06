@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import html
 import re
 from dataclasses import dataclass, field
 from pathlib import Path
@@ -273,6 +274,134 @@ def stop_application(ip: str, auth: HTTPDigestAuth, timeout: int, package: str) 
         raise VapixError(f"STOP application {package} on {ip} failed: {resp.status_code} {resp.reason}")
     if "error" in resp.text.lower():
         raise VapixError(f"STOP application {package} on {ip} rejected: {resp.text.strip()[:200]}")
+
+
+def restart_camera(ip: str, auth: HTTPDigestAuth, timeout: int) -> None:
+    """Trigger a camera reboot. Returns as soon as the camera accepts the
+    request — does NOT wait for it to come back up."""
+    url = f"http://{ip}/axis-cgi/restart.cgi"
+    try:
+        resp = requests.get(url, auth=auth, timeout=timeout)
+    except requests.exceptions.Timeout:
+        raise VapixError(f"Connection timeout to {ip}")
+    except requests.exceptions.ConnectionError as e:
+        raise VapixError(f"Connection error to {ip}: {e}")
+    except requests.exceptions.RequestException as e:
+        raise VapixError(f"Request error to {ip}: {e}")
+    if resp.status_code != 200:
+        raise VapixError(f"RESTART {ip} failed: {resp.status_code} {resp.reason}")
+
+
+# ---------------------------------------------------------------------------
+# Legacy file editor — /admin-bin/editcgi.cgi (AXIS OS 5.x). The only way to
+# configure remote syslog on 5.51 firmware, which has no syslog parameter:
+# sysklogd reads /etc/syslog.conf, editable here. VERIFIED against a real
+# AXIS M3005 (192.168.1.60, firmware 5.51.7.4, 2026-10-05): read, write, and
+# persistence across reboot all confirmed. sysklogd only rereads the file on
+# restart, so a write takes effect after restart_camera().
+# ---------------------------------------------------------------------------
+
+_EDITCGI_CONTENT = re.compile(r"<textarea[^>]*name=[\"']?content[\"']?[^>]*>\n?(.*?)</textarea>", re.S)
+_EDITCGI_WROTE = re.compile(r"Wrote (\d+) bytes")
+
+
+def read_camera_file(ip: str, auth: HTTPDigestAuth, timeout: int, path: str) -> str:
+    """GET a text file's contents from the camera filesystem. Raises VapixError
+    if the request fails or the camera reports the file can't be read."""
+    url = f"http://{ip}/admin-bin/editcgi.cgi"
+    try:
+        resp = requests.get(url, params={"file": path}, auth=auth, timeout=timeout)
+    except requests.exceptions.Timeout:
+        raise VapixError(f"Connection timeout to {ip}")
+    except requests.exceptions.ConnectionError as e:
+        raise VapixError(f"Connection error to {ip}: {e}")
+    except requests.exceptions.RequestException as e:
+        raise VapixError(f"Request error to {ip}: {e}")
+    if resp.status_code != 200:
+        raise VapixError(f"READ {path} from {ip} failed: {resp.status_code} {resp.reason}")
+    match = _EDITCGI_CONTENT.search(resp.text)
+    if match is None:
+        raise VapixError(f"READ {path} from {ip} rejected: {re.sub('<[^>]+>', ' ', resp.text).strip()[:200]}")
+    return html.unescape(match.group(1))
+
+
+def write_camera_file(ip: str, auth: HTTPDigestAuth, timeout: int, path: str, content: str) -> None:
+    """Overwrite a text file on the camera filesystem (mode 0644). Raises VapixError on failure."""
+    url = f"http://{ip}/admin-bin/editcgi.cgi"
+    try:
+        resp = requests.post(
+            url,
+            data={"save_file": path, "mode": "0100644", "convert_crlf_to_lf": "on", "content": content},
+            auth=auth,
+            timeout=timeout,
+        )
+    except requests.exceptions.Timeout:
+        raise VapixError(f"Connection timeout to {ip}")
+    except requests.exceptions.ConnectionError as e:
+        raise VapixError(f"Connection error to {ip}: {e}")
+    except requests.exceptions.RequestException as e:
+        raise VapixError(f"Request error to {ip}: {e}")
+    if resp.status_code != 200:
+        raise VapixError(f"WRITE {path} on {ip} failed: {resp.status_code} {resp.reason}")
+    wrote = _EDITCGI_WROTE.search(resp.text)
+    if wrote is None:
+        raise VapixError(f"WRITE {path} on {ip} rejected: {re.sub('<[^>]+>', ' ', resp.text).strip()[:200]}")
+    # A short write would leave a truncated config on disk — and on the
+    # syslog path the camera is rebooted straight after.
+    expected = len(content.replace("\r\n", "\n").encode("utf-8"))
+    if int(wrote.group(1)) != expected:
+        raise VapixError(f"WRITE {path} on {ip} incomplete: wrote {wrote.group(1)} of {expected} bytes")
+
+
+# ---------------------------------------------------------------------------
+# Remote syslog JSON API — /axis-cgi/remotesyslog.cgi, apiVersion 1.2 (AXIS
+# OS 12). `status` VERIFIED read-only against a real AXIS M3085-V
+# (192.168.0.4, firmware 12.11.72, 2026-10-06): returned
+# {"enabled": false, "servers": []}. The `setup` call (which both configures
+# and enables forwarding) follows developer.axis.com/vapix/network-video/
+# remote-syslog but is NOT yet verified against real hardware.
+# ---------------------------------------------------------------------------
+
+_REMOTE_SYSLOG_API_VERSION = "1.2"
+
+
+def _remote_syslog_call(ip: str, auth: HTTPDigestAuth, timeout: int, method: str, params: Optional[dict] = None) -> dict:
+    url = f"http://{ip}/axis-cgi/remotesyslog.cgi"
+    body: dict = {"apiVersion": _REMOTE_SYSLOG_API_VERSION, "method": method}
+    if params is not None:
+        body["params"] = params
+    try:
+        resp = requests.post(url, json=body, auth=auth, timeout=timeout)
+    except requests.exceptions.Timeout:
+        raise VapixError(f"Connection timeout to {ip}")
+    except requests.exceptions.ConnectionError as e:
+        raise VapixError(f"Connection error to {ip}: {e}")
+    except requests.exceptions.RequestException as e:
+        raise VapixError(f"Request error to {ip}: {e}")
+    if resp.status_code != 200:
+        raise VapixError(f"remotesyslog.cgi {method} on {ip} failed: {resp.status_code} {resp.reason}")
+    try:
+        payload = resp.json()
+    except ValueError:
+        raise VapixError(f"remotesyslog.cgi {method} on {ip}: response was not valid JSON")
+    if not isinstance(payload, dict):
+        raise VapixError(f"remotesyslog.cgi {method} on {ip}: unexpected response {str(payload)[:200]}")
+    if "error" in payload:
+        raise VapixError(f"remotesyslog.cgi {method} on {ip} rejected: {payload['error']}")
+    data = payload.get("data") or {}
+    if not isinstance(data, dict):
+        raise VapixError(f"remotesyslog.cgi {method} on {ip}: unexpected data {str(data)[:200]}")
+    return data
+
+
+def get_remote_syslog(ip: str, auth: HTTPDigestAuth, timeout: int) -> dict:
+    """Return the camera's remote syslog state: {"enabled": bool, "servers": [...]}."""
+    return _remote_syslog_call(ip, auth, timeout, "status")
+
+
+def set_remote_syslog(ip: str, auth: HTTPDigestAuth, timeout: int, servers: list[dict]) -> None:
+    """Configure AND enable remote syslog via `setup` — a FULL REPLACE of the server list."""
+    _remote_syslog_call(ip, auth, timeout, "setup", {"servers": servers})
 
 
 # ---------------------------------------------------------------------------
