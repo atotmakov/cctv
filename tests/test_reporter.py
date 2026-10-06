@@ -345,3 +345,44 @@ def test_print_camera_status_empty(capsys) -> None:
     out = capsys.readouterr().out
     assert "No Axis cameras found" in out
     assert exit_code == 0
+
+
+# --- syslog line in print_camera_status ---
+
+from cctv.status import SyslogTarget  # noqa: E402
+
+
+def _syslog_status(**kw) -> CameraStatusResult:
+    return CameraStatusResult(ip=_IP, model=_MODEL, smb_ip="1.2.3.4", smb_share="/x", smb_username="u", **kw)
+
+
+def test_print_camera_status_syslog_forwarding(capsys) -> None:
+    print_camera_status([_syslog_status(
+        syslog_source="syslog.conf", syslog_enabled=True,
+        syslog_targets=[SyslogTarget("192.168.1.100", 514, "*.info;authpriv.none")],
+        syslog_expected_host="192.168.1.100",
+    )])
+    out = capsys.readouterr().out
+    assert "  syslog:       192.168.1.100:514 *.info;authpriv.none [syslog.conf]" in out
+    assert "NOT forwarding" not in out
+
+
+def test_print_camera_status_syslog_not_forwarding_flags_config_host(capsys) -> None:
+    print_camera_status([_syslog_status(syslog_source="syslog.conf", syslog_expected_host="192.168.1.100")])
+    out = capsys.readouterr().out
+    assert "  syslog:       not forwarding [syslog.conf]" in out
+    assert "NOT forwarding to 192.168.1.100 from cameras.yaml" in out
+
+
+def test_print_camera_status_syslog_disabled_api(capsys) -> None:
+    print_camera_status([_syslog_status(
+        syslog_source="remote syslog API", syslog_enabled=False,
+        syslog_targets=[SyslogTarget("10.0.0.9", 6514, "TLS RFC5424 Warning")],
+    )])
+    out = capsys.readouterr().out
+    assert "  syslog:       disabled (configured: 10.0.0.9:6514 TLS RFC5424 Warning) [remote syslog API]" in out
+
+
+def test_print_camera_status_syslog_unavailable(capsys) -> None:
+    print_camera_status([_syslog_status(syslog_error="Connection timeout")])
+    assert "  syslog:       unavailable — Connection timeout" in capsys.readouterr().out
